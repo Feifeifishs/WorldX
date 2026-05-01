@@ -255,9 +255,13 @@ npm run create       # 通过命令行直接生成新世界
 - 客户端：`http://localhost:3200`
 - 服务器：`http://localhost:3100`
 
+## 交流群
+<img src="docs/qq_group.jpg" width="200px"/>
+
+
 ## 感谢
 -  [LinuxDO](https://linux.do/)
 
 ## License
-
 MIT
+
