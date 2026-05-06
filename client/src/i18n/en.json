@@ -64,6 +64,7 @@
     "statusSwitchingTimeline": "Switching Timeline",
     "statusCreatingTimeline": "Creating Timeline",
     "statusSimulating": "Running",
+    "statusPausing": "Pausing",
     "statusAutoPlay": "Auto Play",
     "statusPaused": "Paused",
     "statusError": "Error",

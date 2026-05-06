@@ -64,6 +64,7 @@
     "statusSwitchingTimeline": "切换时间线中",
     "statusCreatingTimeline": "创建时间线中",
     "statusSimulating": "运行中",
+    "statusPausing": "正在暂停",
     "statusAutoPlay": "自动运行",
     "statusPaused": "已暂停",
     "statusError": "错误",

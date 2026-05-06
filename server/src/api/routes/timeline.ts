@@ -1,9 +1,24 @@
 import path from "node:path";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { appContext } from "../../services/app-context.js";
+import {
+  getActiveSimulationTicks,
+  getSimulationBusyMessage,
+  isSimulationBusy,
+} from "../../services/simulation-activity.js";
 import { findWorldById } from "../../utils/world-directories.js";
 
 const router = Router();
+
+function rejectIfSimulationBusy(res: Response): boolean {
+  if (!isSimulationBusy()) return false;
+  res.status(409).json({
+    error: getSimulationBusyMessage(),
+    activeSimulationTicks: getActiveSimulationTicks(),
+    canSwitchContext: false,
+  });
+  return true;
+}
 
 // GET /timelines — list timelines for current world
 router.get("/", (_req, res) => {
@@ -54,6 +69,7 @@ router.post("/", (_req, res) => {
     res.status(503).json({ error: "No world loaded" });
     return;
   }
+  if (rejectIfSimulationBusy(res)) return;
 
   try {
     appContext.createNewTimeline();
@@ -80,6 +96,7 @@ router.post("/:id/load", (req, res) => {
     res.status(404).json({ error: "Timeline not found" });
     return;
   }
+  if (rejectIfSimulationBusy(res)) return;
 
   try {
     appContext.switchTimeline(timelineId);

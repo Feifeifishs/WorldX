@@ -51,7 +51,7 @@ export function TopBar({
   onToggleInteractiveObjectsOverlay: () => void;
   onToggleAutoPlay: () => void;
   onNewTimeline: () => void;
-  simStatus: "idle" | "running" | "paused" | "error";
+  simStatus: "idle" | "running" | "pausing" | "paused" | "error";
   autoPlayEnabled: boolean;
   isResetting: boolean;
   isReplaying: boolean;
@@ -77,9 +77,10 @@ export function TopBar({
   );
   const barRef = useRef<HTMLDivElement | null>(null);
   const isRunning = simStatus === "running";
-  const isBusy = isRunning || isResetting || isSwitchingWorld || isSwitchingTimeline || isChangingTickGranularity;
+  const isPausing = simStatus === "pausing";
+  const isBusy = isRunning || isPausing || isResetting || isSwitchingWorld || isSwitchingTimeline || isChangingTickGranularity;
   const autoPlayToggleDisabled =
-    isResetting || isSwitchingWorld || isSwitchingTimeline || isChangingTickGranularity || (isRunning && !autoPlayEnabled);
+    isResetting || isSwitchingWorld || isSwitchingTimeline || isChangingTickGranularity || isPausing || (isRunning && !autoPlayEnabled);
 
   const inRunMode = viewMode === "run" && !isReplaying;
   const inReplayMode = viewMode === "replay" || isReplaying;
@@ -174,6 +175,8 @@ export function TopBar({
       ? t("topbar.statusCreatingTimeline")
       : simStatus === "running"
       ? t("topbar.statusSimulating")
+      : simStatus === "pausing"
+      ? t("topbar.statusPausing")
       : autoPlayEnabled
         ? t("topbar.statusAutoPlay")
       : simStatus === "paused"
@@ -190,6 +193,8 @@ export function TopBar({
       ? "#e67e22"
       : simStatus === "running"
       ? "#f39c12"
+      : simStatus === "pausing"
+      ? "#f1c40f"
       : simStatus === "error"
         ? "#e74c3c"
         : simStatus === "paused"

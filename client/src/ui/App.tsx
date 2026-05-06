@@ -1,6 +1,6 @@
 import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useState, useEffect, useCallback, Component } from "react";
+import { useState, useEffect, useCallback, useRef, Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { createPortal } from "react-dom";
 import Phaser from "phaser";
@@ -73,13 +73,14 @@ function AppContent({ eventBus }: { eventBus: Phaser.Events.EventEmitter }) {
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [followedCharId, setFollowedCharId] = useState<string | null>(null);
   const [events, setEvents] = useState<SimulationEvent[]>([]);
-  const [simStatus, setSimStatus] = useState<"idle" | "running" | "paused" | "error">("idle");
+  const [simStatus, setSimStatus] = useState<"idle" | "running" | "pausing" | "paused" | "error">("idle");
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayProgress, setReplayProgress] = useState<{ current: number; total: number } | null>(null);
   const [dialogueEvents, setDialogueEvents] = useState<SimulationEvent[]>([]);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const lastTimelineKeyRef = useRef<string | null>(null);
   const [transitionPhase, setTransitionPhase] = useState<"hidden" | "ending" | "starting" | "fade-out">("hidden");
   const [lastKnownDay, setLastKnownDay] = useState(0);
   const [topBarHeight, setTopBarHeight] = useState(DEFAULT_TOP_BAR_HEIGHT);
@@ -101,6 +102,24 @@ function AppContent({ eventBus }: { eventBus: Phaser.Events.EventEmitter }) {
   useEffect(() => {
     eventBus.emit("set_cycle_ticks", ticksPerScene);
   }, [ticksPerScene, eventBus]);
+
+  useEffect(() => {
+    const timelineId = worldInfo?.currentTimelineId;
+    if (!timelineId) return;
+
+    const timelineKey = `${worldInfo?.currentWorldId ?? ""}:${timelineId}`;
+    if (lastTimelineKeyRef.current === null) {
+      lastTimelineKeyRef.current = timelineKey;
+      return;
+    }
+    if (lastTimelineKeyRef.current === timelineKey) return;
+
+    lastTimelineKeyRef.current = timelineKey;
+    setEvents([]);
+    setDialogueEvents([]);
+    setDismissedIds(new Set());
+    setReplayProgress(null);
+  }, [worldInfo?.currentWorldId, worldInfo?.currentTimelineId]);
 
   useEffect(() => {
     const topOffset = hideMainChrome ? 0 : Math.max(topBarHeight, DEFAULT_TOP_BAR_HEIGHT);
@@ -268,7 +287,7 @@ function AppContent({ eventBus }: { eventBus: Phaser.Events.EventEmitter }) {
     const onSimEvent = (event: SimulationEvent) => {
       setEvents((prev) => [event, ...prev].slice(0, 50));
     };
-    const onSimStatus = (payload: { status?: "idle" | "running" | "paused" | "error" }) => {
+    const onSimStatus = (payload: { status?: "idle" | "running" | "pausing" | "paused" | "error" }) => {
       if (payload.status) setSimStatus(payload.status);
     };
     const onDialogue = (event: SimulationEvent) => {

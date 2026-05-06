@@ -256,10 +256,11 @@ export class MapManager {
     const point = this.getMainAreaPoint(pointId);
     if (!point) return null;
 
-    const halfDistance = Math.max(this.tileSize * 2, desiredDistance / 2);
+    const halfDistance = Math.max(MAIN_AREA_OCCUPANCY_RADIUS_PX, desiredDistance / 2);
     const dominantAxis = this.getDominantDialogueAxis(approachFrom);
-    const alternateAxis = dominantAxis.x !== 0 ? { x: 0, y: 1 } : { x: 1, y: 0 };
-    const axisCandidates = [dominantAxis, alternateAxis];
+    const horizontalAxis = dominantAxis.x !== 0 ? dominantAxis : { x: 1, y: 0 };
+    const verticalAxis = dominantAxis.y !== 0 ? dominantAxis : { x: 0, y: 1 };
+    const axisCandidates = [horizontalAxis, verticalAxis];
     const validPairs: Array<{
       initiator: { x: number; y: number };
       responder: { x: number; y: number };
@@ -317,7 +318,11 @@ export class MapManager {
     const responderFallback = this.getMainAreaPlacement(pointId, responderId, {
       occupantIds: [initiatorId, responderId],
     });
-    if (initiatorFallback && responderFallback) {
+    if (
+      initiatorFallback &&
+      responderFallback &&
+      this.distanceBetween(initiatorFallback, responderFallback) >= desiredDistance * 0.85
+    ) {
       return { initiator: initiatorFallback, responder: responderFallback };
     }
 
@@ -629,6 +634,13 @@ export class MapManager {
       return { x: vector.x >= 0 ? 1 : -1, y: 0 };
     }
     return { x: 0, y: vector.y >= 0 ? 1 : -1 };
+  }
+
+  private distanceBetween(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+  ): number {
+    return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
   private isPixelWalkable(x: number, y: number): boolean {

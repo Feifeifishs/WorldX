@@ -1,5 +1,12 @@
-import { Router } from "express";
+import path from "node:path";
+import { Router, type Request, type Response } from "express";
 import { appContext } from "../../services/app-context.js";
+import {
+  beginSimulationTick,
+  getActiveSimulationTicks,
+  getSimulationBusyMessage,
+  isSimulationBusy,
+} from "../../services/simulation-activity.js";
 import {
   buildWorldTimeInfo,
   getBatchTicksForOneCycle,
@@ -15,11 +22,77 @@ let simStatus: SimStatus = "idle";
 let simProgress = { current: 0, total: 0 };
 let cancelRequested = false;
 
+function getCurrentSimulationContext(): {
+  worldId: string | null;
+  timelineId: string | null;
+} {
+  const worldDir = appContext.getWorldDir();
+  return {
+    worldId: worldDir ? path.basename(worldDir) : null,
+    timelineId: appContext.timelineManager.getCurrentTimelineId(),
+  };
+}
+
+function rejectIfSimulationContextChanged(req: Request, res: Response): boolean {
+  const expectedWorldId =
+    typeof req.body?.worldId === "string" ? req.body.worldId : "";
+  const expectedTimelineId =
+    typeof req.body?.timelineId === "string" ? req.body.timelineId : "";
+  const current = getCurrentSimulationContext();
+
+  if (!current.worldId || !current.timelineId) {
+    res.status(503).json({ error: "No active simulation context" });
+    return true;
+  }
+
+  if (!expectedWorldId || !expectedTimelineId) {
+    res.status(400).json({
+      error: "worldId and timelineId are required for simulation ticks.",
+      currentWorldId: current.worldId,
+      currentTimelineId: current.timelineId,
+    });
+    return true;
+  }
+
+  if (
+    expectedWorldId !== current.worldId ||
+    expectedTimelineId !== current.timelineId
+  ) {
+    res.status(409).json({
+      error: "Simulation context changed before this tick started. Discarding stale tick request.",
+      currentWorldId: current.worldId,
+      currentTimelineId: current.timelineId,
+    });
+    return true;
+  }
+
+  return false;
+}
+
+async function runGuardedSimulationTick() {
+  const finishTick = beginSimulationTick();
+  try {
+    return await appContext.simulationEngine.simulateTick();
+  } finally {
+    finishTick();
+  }
+}
+
+function buildSimulationActivityPayload() {
+  const activeSimulationTicks = getActiveSimulationTicks();
+  return {
+    activeSimulationTicks,
+    canSwitchContext: activeSimulationTicks === 0,
+  };
+}
+
 // POST /simulation/tick — advance 1 tick
-router.post("/tick", async (_req, res) => {
+router.post("/tick", async (req, res) => {
+  if (rejectIfSimulationContextChanged(req, res)) return;
+
   try {
     simStatus = "running";
-    const events = await appContext.simulationEngine.simulateTick();
+    const events = await runGuardedSimulationTick();
     const gameTime = appContext.worldManager.getCurrentTime();
     const worldTime = buildWorldTimeInfo(gameTime);
     const persistedEvents = eventStore
@@ -35,6 +108,7 @@ router.post("/tick", async (_req, res) => {
       gameTime: worldTime,
       eventCount: events.length,
       events: persistedEvents,
+      ...buildSimulationActivityPayload(),
     });
   } catch (err) {
     simStatus = "idle";
@@ -81,7 +155,7 @@ router.post("/day", async (_req, res) => {
         return;
       }
 
-      const events = await appContext.simulationEngine.simulateTick();
+      const events = await runGuardedSimulationTick();
       allEvents.push(...events);
       simProgress.current = i + 1;
 
@@ -150,7 +224,7 @@ router.post("/days", async (req, res) => {
           return;
         }
 
-        const events = await appContext.simulationEngine.simulateTick();
+        const events = await runGuardedSimulationTick();
         totalEvents += events.length;
         simProgress.current = d * maxTicks + t + 1;
 
@@ -176,7 +250,7 @@ router.post("/days", async (req, res) => {
 // POST /simulation/pause
 router.post("/pause", (_req, res) => {
   cancelRequested = true;
-  res.json({ ok: true });
+  res.json({ ok: true, ...buildSimulationActivityPayload() });
 });
 
 // POST /simulation/resume
@@ -189,6 +263,11 @@ router.post("/resume", (_req, res) => {
 // POST /simulation/reset
 router.post("/reset", (_req, res) => {
   try {
+    if (isSimulationBusy()) {
+      res.status(409).json({ error: getSimulationBusyMessage(), ...buildSimulationActivityPayload() });
+      return;
+    }
+
     appContext.resetWorldState();
     const gameTime = buildWorldTimeInfo(appContext.worldManager.getCurrentTime());
     simStatus = "idle";
@@ -205,6 +284,7 @@ router.get("/status", (_req, res) => {
     status: simStatus,
     gameTime,
     progress: simStatus === "running" ? simProgress : null,
+    ...buildSimulationActivityPayload(),
   });
 });
 

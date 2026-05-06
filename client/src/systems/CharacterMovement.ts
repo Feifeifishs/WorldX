@@ -174,15 +174,17 @@ export class CharacterMovement {
       desiredDistance,
     );
     if (mainAreaDialogueTargets) {
-      const initiatorMoved = await this.moveSpriteToDialogueTarget(
+      const initiatorPath = await this.findPathToDialogueTarget(
         initiator,
         mainAreaDialogueTargets.initiator,
       );
-      const responderMoved = await this.moveSpriteToDialogueTarget(
+      const responderPath = await this.findPathToDialogueTarget(
         responder,
         mainAreaDialogueTargets.responder,
       );
-      if (initiatorMoved && responderMoved) {
+      if (initiatorPath && responderPath) {
+        await this.moveSpriteAlongDialoguePath(initiator, initiatorPath, mainAreaDialogueTargets.initiator);
+        await this.moveSpriteAlongDialoguePath(responder, responderPath, mainAreaDialogueTargets.responder);
         this.applyMainAreaLanding(initiator, responder.mainAreaPointId!, mainAreaDialogueTargets.initiator);
         this.applyMainAreaLanding(responder, responder.mainAreaPointId!, mainAreaDialogueTargets.responder);
         this.facePair(initiator, responder);
@@ -191,6 +193,15 @@ export class CharacterMovement {
     }
 
     if (distance <= desiredDistance) {
+      const minComfortableDistance = this.getMinimumComfortableDialogueDistance(desiredDistance);
+      if (distance < minComfortableDistance) {
+        const separationPath = await this.findDialogueApproachPath(initiator, responder);
+        if (separationPath) {
+          await this.moveSpriteToDialoguePoint(initiator, separationPath);
+          this.syncSpriteLocation(initiator);
+        }
+      }
+
       const persistencePatch = this.buildDialoguePersistencePatch(initiator, responder);
       if (persistencePatch?.mainAreaPointId) {
         initiator.mainAreaPointId = persistencePatch.mainAreaPointId;
@@ -349,6 +360,10 @@ export class CharacterMovement {
     return Math.max(this.mapManager.tileSize, referenceHeight * DIALOGUE_FACE_TO_FACE_HEIGHT_RATIO);
   }
 
+  private getMinimumComfortableDialogueDistance(desiredDistance: number): number {
+    return Math.max(this.mapManager.tileSize * 1.5, desiredDistance * 0.55);
+  }
+
   private rankDialogueApproachCandidates(
     candidates: Array<{ x: number; y: number; distance: number }>,
     desiredTarget: { x: number; y: number },
@@ -377,21 +392,31 @@ export class CharacterMovement {
     await this.walkSprite(sprite, path);
   }
 
-  private async moveSpriteToDialogueTarget(
+  private async findPathToDialogueTarget(
     sprite: CharacterSprite,
     target: { x: number; y: number },
-  ): Promise<boolean> {
+  ): Promise<{ x: number; y: number }[] | null> {
     const distance = Phaser.Math.Distance.Between(sprite.x, sprite.y, target.x, target.y);
     if (distance <= 2) {
-      sprite.setPosition(target.x, target.y);
-      return true;
+      return [];
     }
     const path = await this.pathfinder.findPath(sprite.x, sprite.y, target.x, target.y);
     if (!path || path.length === 0) {
-      return false;
+      return null;
+    }
+    return path;
+  }
+
+  private async moveSpriteAlongDialoguePath(
+    sprite: CharacterSprite,
+    path: { x: number; y: number }[] | [],
+    target: { x: number; y: number },
+  ): Promise<void> {
+    if (path.length === 0) {
+      sprite.setPosition(target.x, target.y);
+      return;
     }
     await this.moveSpriteToDialoguePoint(sprite, path);
-    return true;
   }
 
   private syncSpriteLocation(sprite: CharacterSprite): void {

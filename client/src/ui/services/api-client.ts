@@ -189,13 +189,18 @@ export const apiClient = {
     return fetchJSON(`/events/highlights?minScore=${minScore}&limit=${limit}`);
   },
 
-  simulateTick(): Promise<{
+  simulateTick(context: {
+    worldId: string;
+    timelineId: string;
+  }): Promise<{
     ok: boolean;
     gameTime: WorldTimeInfo;
     eventCount: number;
     events: SimulationEvent[];
+    activeSimulationTicks?: number;
+    canSwitchContext?: boolean;
   }> {
-    return postJSON("/simulation/tick");
+    return postJSON("/simulation/tick", context);
   },
 
   simulateDay(): Promise<{ ok: boolean; gameTime: WorldTimeInfo; eventCount: number }> {

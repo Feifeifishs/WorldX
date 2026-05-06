@@ -82,7 +82,8 @@ export function CharacterDetail({
   const locationNames = useMemo(() => buildLocationNameMap(locations), [locations]);
   const mergedHistory = useMemo(() => {
     const merged = new Map<string, SimulationEvent>();
-    [...storedEvents, ...liveEvents].forEach((event, index) => {
+    const liveEventsOldToNew = [...liveEvents].reverse();
+    [...storedEvents, ...liveEventsOldToNew].forEach((event, index) => {
       if (!eventTouchesCharacter(event, charId)) return;
       merged.set(event.id || `${event.type}-${event.gameDay}-${event.gameTick}-${index}`, event);
     });

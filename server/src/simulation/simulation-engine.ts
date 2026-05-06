@@ -120,7 +120,15 @@ export class SimulationEngine {
     for (const charId of decisionEligible) {
       const intent = intents.get(charId);
       if (intent?.decision.actionType === "talk_to") {
-        dialogueIntentByInitiator.set(charId, intent.decision);
+        const movementDecision = this.buildMoveTowardDialogueTargetDecision(
+          charId,
+          intent.decision,
+        );
+        if (movementDecision) {
+          intent.decision = movementDecision;
+        } else {
+          dialogueIntentByInitiator.set(charId, intent.decision);
+        }
       }
     }
 
@@ -371,19 +379,61 @@ export class SimulationEngine {
     return events;
   }
 
-  private normalizeDecision(decision: ActionDecision): ActionDecision {
+  private normalizeDecision(decision: ActionDecision, actionMenu?: string): ActionDecision {
     let { targetId, interactionId } = decision;
     if (!targetId) return decision;
 
-    targetId = this.resolveId(targetId);
+    targetId =
+      decision.actionType === "world_action"
+        ? this.resolveWorldActionTargetId(targetId, actionMenu)
+        : this.resolveId(targetId);
     if (interactionId) interactionId = this.resolveId(interactionId);
 
     return { ...decision, targetId, interactionId };
   }
 
+  private resolveWorldActionTargetId(raw: string, actionMenu?: string): string {
+    const trimmed = raw.trim();
+    const exactAction = this.worldManager.getWorldAction(trimmed);
+    if (exactAction) return exactAction.id;
+
+    const menuNumberMatch = trimmed.match(/^#?(\d+)(?:[.)、\s]|$)/);
+    const menuNumber = menuNumberMatch ? Number(menuNumberMatch[1]) : NaN;
+    if (Number.isInteger(menuNumber) && menuNumber > 0) {
+      const actionIdFromMenu = this.resolveWorldActionIdFromMenuNumber(menuNumber, actionMenu);
+      if (actionIdFromMenu) return actionIdFromMenu;
+    }
+
+    for (const action of this.worldManager.getWorldActions()) {
+      if (
+        trimmed.includes(action.id) ||
+        (action.name && trimmed.includes(action.name))
+      ) {
+        return action.id;
+      }
+    }
+
+    return this.resolveId(trimmed);
+  }
+
+  private resolveWorldActionIdFromMenuNumber(menuNumber: number, actionMenu?: string): string | null {
+    if (!actionMenu) return null;
+    const line = actionMenu
+      .split("\n")
+      .find((candidate) => candidate.trim().startsWith(`${menuNumber}. `));
+    if (!line || !line.includes("[world_action]")) return null;
+
+    const match = line.match(/\(([^()]+)\)/);
+    const actionId = match?.[1]?.trim();
+    return actionId && this.worldManager.getWorldAction(actionId) ? actionId : null;
+  }
+
   private resolveId(raw: string): string {
     const trimmed = raw.trim();
 
+    for (const action of this.worldManager.getWorldActions()) {
+      if (trimmed === action.id) return action.id;
+    }
     for (const p of this.characterManager.getAllProfiles()) {
       if (trimmed === p.id) return p.id;
     }
@@ -396,11 +446,17 @@ export class SimulationEngine {
     for (const loc of this.worldManager.getAllLocations()) {
       if (trimmed.includes(loc.id)) return loc.id;
     }
+    for (const action of this.worldManager.getWorldActions()) {
+      if (trimmed.includes(action.id)) return action.id;
+    }
     for (const p of this.characterManager.getAllProfiles()) {
       if (trimmed.includes(p.name) || trimmed.includes(p.nickname)) return p.id;
     }
     for (const loc of this.worldManager.getAllLocations()) {
       if (trimmed.includes(loc.name)) return loc.id;
+    }
+    for (const action of this.worldManager.getWorldActions()) {
+      if (trimmed.includes(action.name)) return action.id;
     }
     for (const loc of this.worldManager.getAllLocations()) {
       for (const obj of loc.objects) {
@@ -473,7 +529,7 @@ export class SimulationEngine {
           actionMenu,
           gameTime,
         );
-        const decision = this.normalizeDecision(rawDecision);
+        const decision = this.normalizeDecision(rawDecision, actionMenu);
         const intent: TickIntent = { decision };
         return [charId, intent] as const;
       }),
@@ -586,6 +642,7 @@ export class SimulationEngine {
 
   private canStartDialogue(charA: string, charB: string): boolean {
     if (charA === charB) return false;
+    if (!this.isKnownCharacter(charB)) return false;
     if (this.worldManager.findDialogueSessionByParticipants(charA, charB)) {
       return false;
     }
@@ -618,7 +675,56 @@ export class SimulationEngine {
     stateA: { location: string; mainAreaPointId?: string | null },
     stateB: { location: string; mainAreaPointId?: string | null },
   ): boolean {
-    return stateA.location === stateB.location;
+    if (stateA.location !== stateB.location) return false;
+    if (stateA.location !== "main_area") return true;
+    // main_area can cover a large public space. Only start speaking in-place
+    // when the point graph says the two characters are already nearby.
+    return this.worldManager.areMainAreaPointsCloseEnoughForDialogueStart(
+      stateA.mainAreaPointId,
+      stateB.mainAreaPointId,
+    );
+  }
+
+  private buildMoveTowardDialogueTargetDecision(
+    charId: string,
+    decision: ActionDecision,
+  ): ActionDecision | null {
+    if (!decision.targetId || !this.isKnownCharacter(decision.targetId)) {
+      return null;
+    }
+
+    const stateA = this.characterManager.getState(charId);
+    const stateB = this.characterManager.getState(decision.targetId);
+    if (stateA.location !== "main_area" || stateB.location !== "main_area") {
+      return null;
+    }
+    if (
+      this.worldManager.areMainAreaPointsCloseEnoughForDialogueStart(
+        stateA.mainAreaPointId,
+        stateB.mainAreaPointId,
+      )
+    ) {
+      return null;
+    }
+    if (!stateB.mainAreaPointId || stateA.mainAreaPointId === stateB.mainAreaPointId) {
+      return null;
+    }
+
+    // Preserve the original "main_area characters may choose to talk" design:
+    // far or disconnected targets become an explicit movement first. The
+    // client can then walk normally, or use its fade-transport fallback if the
+    // generated map has an accidental island.
+    const targetProfile = this.characterManager.getProfile(decision.targetId);
+    return {
+      ...decision,
+      actionType: "move_within_main_area",
+      targetId: `main_area_point:${stateB.mainAreaPointId}`,
+      reason: `先靠近${targetProfile.name}再对话。${decision.reason}`,
+    };
+  }
+
+  private isKnownCharacter(charId: string): boolean {
+    return this.characterManager.getAllProfiles().some((profile) => profile.id === charId);
   }
 
   private canProfileInitiateDialogue(

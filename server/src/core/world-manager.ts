@@ -19,14 +19,23 @@ import * as snapshotStore from "../store/snapshot-store.js";
 import type { SnapshotMeta } from "../store/snapshot-store.js";
 
 const DIALOGUE_SESSION_PREFIX = "dialogue_session:";
-const MAIN_AREA_DIALOGUE_DISTANCE_RATIO = clampRatio(
-  parseFloat(process.env.MAIN_AREA_DIALOGUE_DISTANCE_RATIO || "0.4"),
+const MAIN_AREA_DIALOGUE_MAX_GRAPH_STEPS = Math.max(
+  1,
+  parseInt(process.env.MAIN_AREA_DIALOGUE_MAX_GRAPH_STEPS || "2", 10),
 );
 const MIN_PREFERRED_MAIN_AREA_COMPONENT_SIZE = 6;
 const MIN_PREFERRED_MAIN_AREA_COMPONENT_RATIO = 0.5;
+const MIN_POINT_SPACING_TILES = parseInt(process.env.MAIN_AREA_POINT_MIN_TILES || "6", 10);
+const MAX_POINT_SPACING_TILES = parseInt(process.env.MAIN_AREA_POINT_MAX_TILES || "14", 10);
 const MAIN_AREA_SPAWN_EDGE_PADDING_TILE_MULTIPLIER = 3;
 const MAIN_AREA_SPAWN_EDGE_PADDING_RATIO = 0.03;
 const MAIN_AREA_SPAWN_INTERIOR_POOL_RATIO = 0.5;
+const MAIN_AREA_POINT_ADJACENCY_MULTIPLIER = parseFloat(
+  process.env.MAIN_AREA_POINT_ADJACENCY_MULTIPLIER || "3",
+);
+const MAIN_AREA_POINT_PATH_DETOUR_MULTIPLIER = parseFloat(
+  process.env.MAIN_AREA_POINT_PATH_DETOUR_MULTIPLIER || "2.5",
+);
 
 export interface TickAdvanceResult {
   previousTime: GameTime;
@@ -63,7 +72,9 @@ export class WorldManager {
       config.worldName ?? "main_area",
       config.worldDescription ?? "",
     );
-    this.mainAreaPoints = normalizeMainAreaPoints(config.mainAreaPoints);
+    this.mainAreaPoints = rebuildMainAreaPointAdjacencyFromTmj(
+      normalizeMainAreaPoints(config.mainAreaPoints),
+    );
     this.preferredMainAreaPointIds = getLargestMainAreaPointComponent(this.mainAreaPoints);
     this.mainAreaZoneMap = computeMainAreaZones(this.mainAreaPoints);
     this.worldSize = normalizeWorldSize(config.worldSize) ?? inferWorldSizeFromWorldDir();
@@ -191,11 +202,7 @@ export class WorldManager {
   }
 
   getMainAreaDialogueDistanceThreshold(): number | null {
-    const size = this.worldSize;
-    if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height)) {
-      return null;
-    }
-    return ((size.width + size.height) / 2) * MAIN_AREA_DIALOGUE_DISTANCE_RATIO;
+    return null;
   }
 
   getMainAreaPoint(pointId: string | null | undefined): MainAreaPointConfig | undefined {
@@ -231,19 +238,46 @@ export class WorldManager {
     return candidates[index].id;
   }
 
-  areMainAreaPointsConversable(pointA: string | null | undefined, pointB: string | null | undefined): boolean {
+  areMainAreaPointsCloseEnoughForDialogueStart(
+    pointA: string | null | undefined,
+    pointB: string | null | undefined,
+  ): boolean {
     if (!this.hasMainAreaPointGraph()) return true;
     if (!pointA || !pointB) return false;
     if (pointA === pointB) return true;
-    const threshold = this.getMainAreaDialogueDistanceThreshold();
-    if (threshold != null) {
-      const a = this.getMainAreaPoint(pointA);
-      const b = this.getMainAreaPoint(pointB);
-      if (!a || !b) return false;
-      return distanceBetweenPoints(a, b) <= threshold;
+    return this.areMainAreaPointsReachableWithinSteps(
+      pointA,
+      pointB,
+      MAIN_AREA_DIALOGUE_MAX_GRAPH_STEPS,
+    );
+  }
+
+  private areMainAreaPointsReachableWithinSteps(
+    pointA: string,
+    pointB: string,
+    maxSteps: number,
+  ): boolean {
+    const start = this.getMainAreaPoint(pointA);
+    const target = this.getMainAreaPoint(pointB);
+    if (!start || !target) return false;
+
+    const visited = new Set<string>([pointA]);
+    const queue: Array<{ pointId: string; steps: number }> = [{ pointId: pointA, steps: 0 }];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current.steps >= maxSteps) continue;
+
+      const point = this.getMainAreaPoint(current.pointId);
+      for (const adjacentId of point?.adjacentPointIds || []) {
+        if (adjacentId === pointB) return true;
+        if (visited.has(adjacentId)) continue;
+        visited.add(adjacentId);
+        queue.push({ pointId: adjacentId, steps: current.steps + 1 });
+      }
     }
-    const from = this.getMainAreaPoint(pointA);
-    return !!from?.adjacentPointIds.includes(pointB);
+
+    return false;
   }
 
   getInitialMainAreaPointId(seed: string): string | null {
@@ -646,6 +680,207 @@ function normalizeMainAreaPoints(points: MainAreaPointConfig[] | undefined): Mai
   }));
 }
 
+function rebuildMainAreaPointAdjacencyFromTmj(
+  points: MainAreaPointConfig[],
+): MainAreaPointConfig[] {
+  if (points.length <= 1) return points;
+
+  const worldDir = getWorldDir();
+  if (!worldDir) return points;
+
+  const tmjPath = path.join(worldDir, "map", "06-final.tmj");
+  if (!fs.existsSync(tmjPath)) return points;
+
+  try {
+    const raw = fs.readFileSync(tmjPath, "utf-8");
+    const tmj = JSON.parse(raw) as {
+      width?: number;
+      height?: number;
+      tilewidth?: number;
+      layers?: Array<{ name?: string; data?: unknown }>;
+    };
+    const gridWidth = Number(tmj.width);
+    const gridHeight = Number(tmj.height);
+    const tileSize = Number(tmj.tilewidth);
+    const collisionData = tmj.layers?.find((layer) => layer.name === "collision")?.data;
+
+    if (
+      !Number.isFinite(gridWidth) ||
+      !Number.isFinite(gridHeight) ||
+      !Number.isFinite(tileSize) ||
+      !Array.isArray(collisionData) ||
+      collisionData.length !== gridWidth * gridHeight
+    ) {
+      return points;
+    }
+
+    const rebuilt = attachPathBasedMainAreaPointAdjacency(
+      points,
+      collisionData as number[],
+      gridWidth,
+      gridHeight,
+      tileSize,
+    );
+    return getLargestRawMainAreaPointComponent(rebuilt).size >
+      getLargestRawMainAreaPointComponent(points).size
+      ? rebuilt
+      : points;
+  } catch (error) {
+    console.warn("[WorldManager] Failed to rebuild main area point adjacency:", error);
+    return points;
+  }
+}
+
+function attachPathBasedMainAreaPointAdjacency(
+  points: MainAreaPointConfig[],
+  collisionData: number[],
+  gridWidth: number,
+  gridHeight: number,
+  tileSize: number,
+): MainAreaPointConfig[] {
+  const spacingPx = Math.max(
+    tileSize * MIN_POINT_SPACING_TILES,
+    Math.min(
+      tileSize * MAX_POINT_SPACING_TILES,
+      inferMedianNearestPointDistance(points) || tileSize * MAX_POINT_SPACING_TILES,
+    ),
+  );
+  const adjacencyDistance = Math.max(
+    tileSize * MIN_POINT_SPACING_TILES,
+    spacingPx * MAIN_AREA_POINT_ADJACENCY_MULTIPLIER,
+  );
+  const rebuilt = points.map((point) => ({ ...point, adjacentPointIds: [] as string[] }));
+  const pointMap = new Map(rebuilt.map((point) => [point.id, point]));
+
+  for (let i = 0; i < rebuilt.length; i++) {
+    for (let j = i + 1; j < rebuilt.length; j++) {
+      const a = rebuilt[i];
+      const b = rebuilt[j];
+      if (distanceBetweenPoints(a, b) > adjacencyDistance) continue;
+      if (!hasWalkablePathBetweenPoints(a, b, collisionData, gridWidth, gridHeight, tileSize)) {
+        continue;
+      }
+      pointMap.get(a.id)?.adjacentPointIds.push(b.id);
+      pointMap.get(b.id)?.adjacentPointIds.push(a.id);
+    }
+  }
+
+  for (const point of rebuilt) {
+    const current = pointMap.get(point.id);
+    if (!current || current.adjacentPointIds.length > 0) continue;
+
+    const nearest = rebuilt
+      .filter((candidate) => candidate.id !== point.id)
+      .filter(
+        (candidate) =>
+          distanceBetweenPoints(point, candidate) <= adjacencyDistance &&
+          hasWalkablePathBetweenPoints(point, candidate, collisionData, gridWidth, gridHeight, tileSize),
+      )
+      .sort((a, b) => distanceBetweenPoints(point, a) - distanceBetweenPoints(point, b))[0];
+    if (!nearest) continue;
+    current.adjacentPointIds.push(nearest.id);
+    pointMap.get(nearest.id)?.adjacentPointIds.push(point.id);
+  }
+
+  return rebuilt.map((point) => ({
+    ...point,
+    adjacentPointIds: unique(point.adjacentPointIds).sort(),
+  }));
+}
+
+function inferMedianNearestPointDistance(points: MainAreaPointConfig[]): number | null {
+  if (points.length <= 1) return null;
+  const nearestDistances = points
+    .map((point) =>
+      Math.min(
+        ...points
+          .filter((candidate) => candidate.id !== point.id)
+          .map((candidate) => distanceBetweenPoints(point, candidate)),
+      ),
+    )
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (nearestDistances.length === 0) return null;
+  return nearestDistances[Math.floor(nearestDistances.length / 2)] ?? null;
+}
+
+function hasWalkablePathBetweenPoints(
+  a: MainAreaPointConfig,
+  b: MainAreaPointConfig,
+  collisionData: number[],
+  gridWidth: number,
+  gridHeight: number,
+  tileSize: number,
+): boolean {
+  const start = pointToTile(a, tileSize, gridWidth, gridHeight);
+  const goal = pointToTile(b, tileSize, gridWidth, gridHeight);
+  if (
+    !isWalkableTile(start.x, start.y, collisionData, gridWidth, gridHeight) ||
+    !isWalkableTile(goal.x, goal.y, collisionData, gridWidth, gridHeight)
+  ) {
+    return false;
+  }
+
+  const directSteps = Math.max(
+    1,
+    Math.abs(start.x - goal.x) + Math.abs(start.y - goal.y),
+  );
+  const maxSteps = Math.ceil(directSteps * MAIN_AREA_POINT_PATH_DETOUR_MULTIPLIER) + 12;
+  const minX = Math.max(0, Math.min(start.x, goal.x) - maxSteps);
+  const maxX = Math.min(gridWidth - 1, Math.max(start.x, goal.x) + maxSteps);
+  const minY = Math.max(0, Math.min(start.y, goal.y) - maxSteps);
+  const maxY = Math.min(gridHeight - 1, Math.max(start.y, goal.y) + maxSteps);
+  const queue: Array<{ x: number; y: number; steps: number }> = [
+    { x: start.x, y: start.y, steps: 0 },
+  ];
+  const visited = new Set([`${start.x},${start.y}`]);
+
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i];
+    if (current.x === goal.x && current.y === goal.y) return true;
+    if (current.steps >= maxSteps) continue;
+
+    for (const [nx, ny] of [
+      [current.x + 1, current.y],
+      [current.x - 1, current.y],
+      [current.x, current.y + 1],
+      [current.x, current.y - 1],
+    ]) {
+      if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+      const key = `${nx},${ny}`;
+      if (visited.has(key)) continue;
+      if (!isWalkableTile(nx, ny, collisionData, gridWidth, gridHeight)) continue;
+      visited.add(key);
+      queue.push({ x: nx, y: ny, steps: current.steps + 1 });
+    }
+  }
+
+  return false;
+}
+
+function pointToTile(
+  point: MainAreaPointConfig,
+  tileSize: number,
+  gridWidth: number,
+  gridHeight: number,
+): { x: number; y: number } {
+  return {
+    x: clampInt(Math.floor(point.x / tileSize), 0, gridWidth - 1),
+    y: clampInt(Math.floor(point.y / tileSize), 0, gridHeight - 1),
+  };
+}
+
+function isWalkableTile(
+  gx: number,
+  gy: number,
+  collisionData: number[],
+  gridWidth: number,
+  gridHeight: number,
+): boolean {
+  if (gx < 0 || gy < 0 || gx >= gridWidth || gy >= gridHeight) return false;
+  return collisionData[gy * gridWidth + gx] === 0;
+}
+
 function mergeSceneConfigOverride(base: SceneConfig, override: Partial<SceneConfig>): SceneConfig {
   const nextTickDuration =
     typeof override.tickDurationMinutes === "number" && Number.isFinite(override.tickDurationMinutes)
@@ -739,6 +974,21 @@ function distanceBetweenPoints(a: MainAreaPointConfig, b: MainAreaPointConfig): 
 function getLargestMainAreaPointComponent(points: MainAreaPointConfig[]): Set<string> | null {
   if (points.length === 0) return null;
 
+  const largest = getLargestRawMainAreaPointComponent(points);
+  if (largest.size === 0) return null;
+
+  const componentRatio = largest.size / points.length;
+  if (
+    largest.size < MIN_PREFERRED_MAIN_AREA_COMPONENT_SIZE ||
+    componentRatio < MIN_PREFERRED_MAIN_AREA_COMPONENT_RATIO
+  ) {
+    return null;
+  }
+
+  return largest;
+}
+
+function getLargestRawMainAreaPointComponent(points: MainAreaPointConfig[]): Set<string> {
   const pointMap = new Map(points.map((point) => [point.id, point]));
   const reverseAdjacency = new Map<string, string[]>();
   for (const point of points) {
@@ -751,7 +1001,7 @@ function getLargestMainAreaPointComponent(points: MainAreaPointConfig[]): Set<st
   }
 
   const visited = new Set<string>();
-  let largest: Set<string> | null = null;
+  let largest = new Set<string>();
 
   for (const point of points) {
     if (visited.has(point.id)) continue;
@@ -777,27 +1027,16 @@ function getLargestMainAreaPointComponent(points: MainAreaPointConfig[]): Set<st
       }
     }
 
-    if (!largest || component.size > largest.size) {
+    if (component.size > largest.size) {
       largest = component;
     }
-  }
-
-  if (!largest) return null;
-
-  const componentRatio = largest.size / points.length;
-  if (
-    largest.size < MIN_PREFERRED_MAIN_AREA_COMPONENT_SIZE ||
-    componentRatio < MIN_PREFERRED_MAIN_AREA_COMPONENT_RATIO
-  ) {
-    return null;
   }
 
   return largest;
 }
 
-function clampRatio(value: number): number {
-  if (!Number.isFinite(value)) return 0.2;
-  return Math.max(0.02, Math.min(0.5, value));
+function clampInt(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function buildWorldSocialContext(

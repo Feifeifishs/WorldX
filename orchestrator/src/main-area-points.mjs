@@ -3,6 +3,12 @@ const MIN_POINT_SPACING_TILES = parseInt(process.env.MAIN_AREA_POINT_MIN_TILES |
 const MAX_POINT_SPACING_TILES = parseInt(process.env.MAIN_AREA_POINT_MAX_TILES || "14", 10);
 const SNAP_SEARCH_RADIUS_TILES = parseInt(process.env.MAIN_AREA_POINT_SNAP_TILES || "3", 10);
 const MAX_MAIN_AREA_POINTS = parseInt(process.env.MAIN_AREA_POINT_MAX_COUNT || "24", 10);
+const ADJACENCY_DISTANCE_MULTIPLIER = parseFloat(
+  process.env.MAIN_AREA_POINT_ADJACENCY_MULTIPLIER || "3",
+);
+const PATH_DETOUR_MULTIPLIER = parseFloat(
+  process.env.MAIN_AREA_POINT_PATH_DETOUR_MULTIPLIER || "2.5",
+);
 
 export function buildMainAreaPoints({ tmj, collisionLayer, regions = [], elementObjects = [] }) {
   const tileSize = tmj?.tilewidth || 32;
@@ -208,7 +214,10 @@ function generateCandidates(params) {
 }
 
 function attachAdjacency(points, collisionData, gridWidth, gridHeight, tileSize, spacingPx) {
-  const adjacencyDistance = Math.max(tileSize * 3, spacingPx * 1.45);
+  const adjacencyDistance = Math.max(
+    tileSize * MIN_POINT_SPACING_TILES,
+    spacingPx * ADJACENCY_DISTANCE_MULTIPLIER,
+  );
   const pointMap = new Map(points.map((point) => [point.id, point]));
 
   for (let i = 0; i < points.length; i++) {
@@ -216,7 +225,7 @@ function attachAdjacency(points, collisionData, gridWidth, gridHeight, tileSize,
       const a = points[i];
       const b = points[j];
       if (distance(a, b) > adjacencyDistance) continue;
-      if (!hasWalkableCorridor(a, b, collisionData, gridWidth, gridHeight, tileSize)) continue;
+      if (!hasWalkablePath(a, b, collisionData, gridWidth, gridHeight, tileSize)) continue;
       pointMap.get(a.id)?.adjacentPointIds.push(b.id);
       pointMap.get(b.id)?.adjacentPointIds.push(a.id);
     }
@@ -228,6 +237,10 @@ function attachAdjacency(points, collisionData, gridWidth, gridHeight, tileSize,
 
     const nearest = points
       .filter((candidate) => candidate.id !== point.id)
+      .filter((candidate) =>
+        distance(point, candidate) <= adjacencyDistance &&
+        hasWalkablePath(point, candidate, collisionData, gridWidth, gridHeight, tileSize)
+      )
       .sort((a, b) => distance(point, a) - distance(point, b))
       .find(Boolean);
     if (!nearest) continue;
@@ -336,19 +349,50 @@ function isInsideExpandedRegion(x, y, regions, marginPx) {
   });
 }
 
-function hasWalkableCorridor(a, b, collisionData, gridWidth, gridHeight, tileSize) {
-  const steps = Math.max(6, Math.ceil(distance(a, b) / (tileSize * 0.75)));
-  for (let step = 1; step < steps; step++) {
-    const t = step / steps;
-    const x = lerp(a.x, b.x, t);
-    const y = lerp(a.y, b.y, t);
-    const gx = clampInt(Math.floor(x / tileSize), 0, gridWidth - 1);
-    const gy = clampInt(Math.floor(y / tileSize), 0, gridHeight - 1);
-    if (!isWalkableTile(gx, gy, collisionData, gridWidth, gridHeight)) {
-      return false;
+function hasWalkablePath(a, b, collisionData, gridWidth, gridHeight, tileSize) {
+  const start = pointToTile(a, tileSize, gridWidth, gridHeight);
+  const goal = pointToTile(b, tileSize, gridWidth, gridHeight);
+  if (
+    !isWalkableTile(start.x, start.y, collisionData, gridWidth, gridHeight) ||
+    !isWalkableTile(goal.x, goal.y, collisionData, gridWidth, gridHeight)
+  ) {
+    return false;
+  }
+
+  const directSteps = Math.max(
+    1,
+    Math.abs(start.x - goal.x) + Math.abs(start.y - goal.y),
+  );
+  const maxSteps = Math.ceil(directSteps * PATH_DETOUR_MULTIPLIER) + 12;
+  const minX = Math.max(0, Math.min(start.x, goal.x) - maxSteps);
+  const maxX = Math.min(gridWidth - 1, Math.max(start.x, goal.x) + maxSteps);
+  const minY = Math.max(0, Math.min(start.y, goal.y) - maxSteps);
+  const maxY = Math.min(gridHeight - 1, Math.max(start.y, goal.y) + maxSteps);
+
+  const queue = [{ x: start.x, y: start.y, steps: 0 }];
+  const visited = new Set([`${start.x},${start.y}`]);
+
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i];
+    if (current.x === goal.x && current.y === goal.y) return true;
+    if (current.steps >= maxSteps) continue;
+
+    for (const [nx, ny] of [
+      [current.x + 1, current.y],
+      [current.x - 1, current.y],
+      [current.x, current.y + 1],
+      [current.x, current.y - 1],
+    ]) {
+      if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+      const key = `${nx},${ny}`;
+      if (visited.has(key)) continue;
+      if (!isWalkableTile(nx, ny, collisionData, gridWidth, gridHeight)) continue;
+      visited.add(key);
+      queue.push({ x: nx, y: ny, steps: current.steps + 1 });
     }
   }
-  return true;
+
+  return false;
 }
 
 function isWalkableTile(gx, gy, collisionData, gridWidth, gridHeight) {
@@ -356,12 +400,15 @@ function isWalkableTile(gx, gy, collisionData, gridWidth, gridHeight) {
   return collisionData[gy * gridWidth + gx] === 0;
 }
 
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+function pointToTile(point, tileSize, gridWidth, gridHeight) {
+  return {
+    x: clampInt(Math.floor(point.x / tileSize), 0, gridWidth - 1),
+    y: clampInt(Math.floor(point.y / tileSize), 0, gridHeight - 1),
+  };
 }
 
-function lerp(a, b, t) {
-  return a + (b - a) * t;
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function clamp(value, min, max) {

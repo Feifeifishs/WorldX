@@ -13,9 +13,16 @@ type TickResponse = {
   gameTime: WorldTimeInfo;
   eventCount: number;
   events: SimulationEvent[];
+  activeSimulationTicks?: number;
+  canSwitchContext?: boolean;
 };
 
 export type PlaybackMode = "live" | "replay";
+
+type LiveSimulationContext = {
+  worldId: string;
+  timelineId: string;
+};
 
 export class PlaybackController extends Phaser.Events.EventEmitter {
   private currentTime: WorldTimeInfo = {
@@ -31,6 +38,7 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
   private playbackInProgress = false;
   private requestInFlight = false;
   private prefetchedTick: TickResponse | null = null;
+  private liveContext: LiveSimulationContext | null = null;
   private cycleTicks = 48;
   private curtainDropped = false;
 
@@ -46,8 +54,17 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
   }
 
   async initialize(): Promise<void> {
-    const worldTime = await apiClient.getWorldTime();
+    const [worldTime, worldInfo] = await Promise.all([
+      apiClient.getWorldTime(),
+      apiClient.getWorldInfo(),
+    ]);
     this.currentTime = worldTime;
+    if (worldInfo.currentWorldId && worldInfo.currentTimelineId) {
+      this.liveContext = {
+        worldId: worldInfo.currentWorldId,
+        timelineId: worldInfo.currentTimelineId,
+      };
+    }
     this.globalEventBus.emit("time_update", { ...this.currentTime });
     this.globalEventBus.emit("simulation_status", { status: "idle" });
     this.emitPlaybackState();
@@ -252,6 +269,13 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
     this.autoPlay = enabled;
     this.nextTickDueAt = enabled ? performance.now() : 0;
     this.emitPlaybackState();
+    if (!enabled) {
+      this.globalEventBus.emit("simulation_status", {
+        status: this.requestInFlight || this.playbackInProgress ? "pausing" : "paused",
+        autoPlay: this.autoPlay,
+        tickIntervalMs: this.tickIntervalMs,
+      });
+    }
   }
 
   setTickIntervalMs(value: number): void {
@@ -321,7 +345,7 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
 
       await this.waitForTickPlaybackCompletion(result.events?.length ?? 0);
       this.globalEventBus.emit("simulation_status", {
-        status: "idle",
+        status: this.autoPlay ? "running" : this.requestInFlight ? "pausing" : "paused",
         eventCount: result.eventCount,
         autoPlay: this.autoPlay,
         tickIntervalMs: this.tickIntervalMs,
@@ -347,9 +371,13 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
   }
 
   private async fetchTick(): Promise<TickResponse> {
+    if (!this.liveContext) {
+      throw new Error("Simulation context is not ready.");
+    }
+
     this.requestInFlight = true;
     try {
-      return await apiClient.simulateTick();
+      return await apiClient.simulateTick(this.liveContext);
     } finally {
       this.requestInFlight = false;
     }
@@ -360,6 +388,13 @@ export class PlaybackController extends Phaser.Events.EventEmitter {
     void this.fetchTick()
       .then((result) => {
         this.prefetchedTick = result;
+        if (!this.autoPlay && !this.playbackInProgress) {
+          this.globalEventBus.emit("simulation_status", {
+            status: "paused",
+            autoPlay: this.autoPlay,
+            tickIntervalMs: this.tickIntervalMs,
+          });
+        }
       })
       .catch((error) => {
         this.autoPlay = false;

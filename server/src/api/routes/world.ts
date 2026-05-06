@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { appContext } from "../../services/app-context.js";
+import {
+  getActiveSimulationTicks,
+  getSimulationBusyMessage,
+  isSimulationBusy,
+} from "../../services/simulation-activity.js";
 import { buildSceneRuntimeInfo, buildWorldTimeInfo } from "../../utils/time-helpers.js";
 import * as worldStateStore from "../../store/world-state-store.js";
 import {
@@ -13,6 +18,16 @@ import {
 } from "../../utils/world-directories.js";
 
 const router = Router();
+
+function rejectIfSimulationBusy(res: Response): boolean {
+  if (!isSimulationBusy()) return false;
+  res.status(409).json({
+    error: getSimulationBusyMessage(),
+    activeSimulationTicks: getActiveSimulationTicks(),
+    canSwitchContext: false,
+  });
+  return true;
+}
 
 router.get("/time", (_req, res) => {
   if (!appContext.hasWorld) {
@@ -56,6 +71,7 @@ router.post("/dev/tick-duration", (req, res) => {
     res.status(400).json({ error: "tickDurationMinutes must be one of 15, 30, 60" });
     return;
   }
+  if (rejectIfSimulationBusy(res)) return;
 
   appContext.setDevTickDurationMinutes(tickDurationMinutes);
   const wm = appContext.worldManager;
@@ -99,6 +115,7 @@ router.post("/select", (req, res) => {
     res.status(404).json({ error: "World not found" });
     return;
   }
+  if (rejectIfSimulationBusy(res)) return;
 
   appContext.switchWorld(world.dir);
   res.json({

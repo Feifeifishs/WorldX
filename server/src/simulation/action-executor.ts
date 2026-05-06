@@ -216,9 +216,12 @@ export function executeAction(
       }
 
       const zoneSeed = `${charId}:${gameTime.day}:${gameTime.tick}:within`;
+      const pointMatch = decision.targetId?.match(/^main_area_point:(.+)$/);
       const zoneMatch = decision.targetId?.match(/^main_area:(.+)$/);
       let nextPointId: string | null;
-      if (zoneMatch) {
+      if (pointMatch && worldManager.getMainAreaPoint(pointMatch[1])) {
+        nextPointId = pointMatch[1];
+      } else if (zoneMatch) {
         const targetZone = zoneMatch[1] as MainAreaZone;
         nextPointId = worldManager.pickPointInZone(targetZone, zoneSeed, state.mainAreaPointId)
           ?? worldManager.pickDistantMainAreaPointId(state.mainAreaPointId, zoneSeed);

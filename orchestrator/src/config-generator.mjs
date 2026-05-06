@@ -22,14 +22,24 @@ export function generateConfigs(worldDesign, worldDir, options = {}) {
 
   const tmjRegions = regionsLayer?.objects || [];
   const tmjObjects = objectsLayer?.objects || [];
+  const primaryPublicHubRegion = findPrimaryPublicHubRegion(
+    tmjRegions,
+    normalizedDesign,
+    tmj,
+  );
+  const mainAreaPointRegions = primaryPublicHubRegion
+    ? tmjRegions.filter((region) => region !== primaryPublicHubRegion)
+    : tmjRegions;
   const mainAreaPoints = buildMainAreaPoints({
     tmj,
     collisionLayer,
-    regions: tmjRegions,
+    regions: mainAreaPointRegions,
     elementObjects: tmjObjects,
   });
 
-  const locations = buildLocations(tmjRegions, tmjObjects, normalizedDesign, tmj);
+  const locations = buildLocations(tmjRegions, tmjObjects, normalizedDesign, tmj, {
+    primaryPublicHubRegion,
+  });
   const worldActions = buildWorldActions(normalizedDesign);
   const sceneConfig = {
     sceneType: normalizedDesign.sceneType,
@@ -172,109 +182,43 @@ export function generateConfigs(worldDesign, worldDir, options = {}) {
   return { worldConfig, characterConfigs, sceneConfig };
 }
 
-function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj) {
+function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj, options = {}) {
   const designedRegions = worldDesign.regions || worldDesign.locations || [];
   const designedElements = worldDesign.interactiveElements || [];
+  const primaryPublicHubRegion = options.primaryPublicHubRegion || null;
+  const primaryPublicHubId = primaryPublicHubRegion
+    ? getRegionId(primaryPublicHubRegion)
+    : null;
 
   // Build element-based objects that belong to main_area
   const elementObjects = buildElementObjects(designedElements, tmjObjects);
 
   if (tmjRegions.length > 0) {
-    const authoredLocations = tmjRegions.map((region) => {
-      const props = {};
-      (region.properties || []).forEach((p) => {
-        props[p.name] = p.value;
-      });
+    const primaryHubObjects = primaryPublicHubRegion
+      ? buildObjectsForRegion("main_area", primaryPublicHubRegion, tmjObjects, designedRegions)
+      : [];
+    const authoredLocations = tmjRegions
+      .filter((region) => getRegionId(region) !== primaryPublicHubId)
+      .map((region) => {
+        const props = getObjectProperties(region);
+        const regionId = getRegionId(region);
+        const designedLoc = findMatchingLocation(regionId, props, designedRegions);
+        const regionObjects = buildObjectsForRegion(regionId, region, tmjObjects, designedRegions);
 
-      const regionId =
-        props.id || region.name?.toLowerCase().replace(/\s+/g, "_") || `region_${region.id}`;
-
-      const designedLoc = findMatchingLocation(regionId, props, designedRegions);
-
-      const regionObjects = tmjObjects
-        .filter((obj) => isObjectInRegion(obj, region))
-        .map((obj) => {
-          const objProps = {};
-          (obj.properties || []).forEach((p) => {
-            objProps[p.name] = p.value;
-          });
-
-          let interactions = [];
-          if (objProps.interactions) {
-            try {
-              interactions = JSON.parse(objProps.interactions);
-            } catch {
-              interactions = [];
-            }
-          }
-
-          return {
-            id:
-              objProps.objectId ||
-              obj.name?.toLowerCase().replace(/\s+/g, "_") ||
-              `obj_${obj.id}`,
-            name: obj.name || "Unknown Object",
-            locationId: regionId,
-            defaultState: "available",
-            capacity: 1,
-            interactions: interactions.map((inter) => ({
-              id: inter.id || inter.name?.toLowerCase().replace(/\s+/g, "_"),
-              name: inter.name || inter.id,
-              description: inter.description || "",
-              availableWhenState: inter.availableWhenState || ["available"],
-              duration: inter.duration || 2,
-              effects: inter.effects || [{ type: "character_need", target: "curiosity", value: 5 }],
-              repeatable: inter.repeatable ?? true,
-            })),
-          };
-        });
-
-      if (designedLoc?.interactions && regionObjects.length === 0) {
-        designedLoc.interactions.forEach((inter) => {
-          regionObjects.push({
-            id: inter.id || `${regionId}_action`,
-            name: inter.name,
-            locationId: regionId,
-            defaultState: "available",
-            capacity: 2,
-            interactions: [
-              {
-                id: inter.id,
-                name: inter.name,
-                description: inter.description || "",
-                availableWhenState: inter.availableWhenState || ["available"],
-                duration: inter.duration || 2,
-                effects: inter.effects || [],
-                repeatable: inter.repeatable ?? true,
-                ...(inter.requiresAnchor === true ? { requiresAnchor: true } : {}),
-              },
-            ],
-          });
-        });
-      }
-
-      const adjacentLocations = tmjRegions
-        .filter((other) => other !== region && regionsAreAdjacent(region, other, tmj.tilewidth * 3))
-        .map((other) => {
-          const otherProps = {};
-          (other.properties || []).forEach((p) => {
-            otherProps[p.name] = p.value;
-          });
-          return (
-            otherProps.id ||
-            other.name?.toLowerCase().replace(/\s+/g, "_") ||
-            `region_${other.id}`
+        const adjacentLocations = tmjRegions
+          .filter((other) => other !== region && regionsAreAdjacent(region, other, tmj.tilewidth * 3))
+          .map((other) =>
+            getRegionId(other) === primaryPublicHubId ? "main_area" : getRegionId(other),
           );
-        });
 
-      return {
-        id: regionId,
-        name: region.name || designedLoc?.name || regionId,
-        description: props.description || designedLoc?.description || "",
-        adjacentLocations,
-        objects: regionObjects,
-      };
-    });
+        return {
+          id: regionId,
+          name: region.name || designedLoc?.name || regionId,
+          description: props.description || designedLoc?.description || "",
+          adjacentLocations,
+          objects: regionObjects,
+        };
+      });
 
     const locations = finalizeLocations(
       authoredLocations,
@@ -282,11 +226,11 @@ function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj) {
       worldDesign.worldDescription || "",
     );
 
-    // Attach element objects to main_area
-    if (elementObjects.length > 0) {
+    // Attach public-hub and element objects to main_area
+    if (primaryHubObjects.length > 0 || elementObjects.length > 0) {
       const mainArea = locations.find((l) => l.id === "main_area");
       if (mainArea) {
-        mainArea.objects = [...mainArea.objects, ...elementObjects];
+        mainArea.objects = [...mainArea.objects, ...primaryHubObjects, ...elementObjects];
       }
     }
 
@@ -329,6 +273,72 @@ function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj) {
   ], worldDesign.worldName || "Main Area", worldDesign.worldDescription || "");
 }
 
+function buildObjectsForRegion(locationId, region, tmjObjects, designedRegions) {
+  const props = getObjectProperties(region);
+  const regionId = getRegionId(region);
+  const designedLoc = findMatchingLocation(regionId, props, designedRegions);
+  const regionObjects = tmjObjects
+    .filter((obj) => isObjectInRegion(obj, region))
+    .map((obj) => {
+      const objProps = getObjectProperties(obj);
+
+      let interactions = [];
+      if (objProps.interactions) {
+        try {
+          interactions = JSON.parse(objProps.interactions);
+        } catch {
+          interactions = [];
+        }
+      }
+
+      return {
+        id:
+          objProps.objectId ||
+          obj.name?.toLowerCase().replace(/\s+/g, "_") ||
+          `obj_${obj.id}`,
+        name: obj.name || "Unknown Object",
+        locationId,
+        defaultState: "available",
+        capacity: 1,
+        interactions: interactions.map((inter) => ({
+          id: inter.id || inter.name?.toLowerCase().replace(/\s+/g, "_"),
+          name: inter.name || inter.id,
+          description: inter.description || "",
+          availableWhenState: inter.availableWhenState || ["available"],
+          duration: inter.duration || 2,
+          effects: inter.effects || [{ type: "character_need", target: "curiosity", value: 5 }],
+          repeatable: inter.repeatable ?? true,
+        })),
+      };
+    });
+
+  if (designedLoc?.interactions && regionObjects.length === 0) {
+    designedLoc.interactions.forEach((inter) => {
+      regionObjects.push({
+        id: inter.id || `${regionId}_action`,
+        name: inter.name,
+        locationId,
+        defaultState: "available",
+        capacity: 2,
+        interactions: [
+          {
+            id: inter.id,
+            name: inter.name,
+            description: inter.description || "",
+            availableWhenState: inter.availableWhenState || ["available"],
+            duration: inter.duration || 2,
+            effects: inter.effects || [],
+            repeatable: inter.repeatable ?? true,
+            ...(inter.requiresAnchor === true ? { requiresAnchor: true } : {}),
+          },
+        ],
+      });
+    });
+  }
+
+  return regionObjects;
+}
+
 function buildElementObjects(designedElements, tmjObjects) {
   return designedElements.map((element) => {
     const interactions = (element.interactions || []).map((inter) => ({
@@ -363,6 +373,169 @@ function buildWorldActions(worldDesign) {
     effects: action.effects || [],
     repeatable: action.repeatable ?? true,
   }));
+}
+
+const PUBLIC_HUB_KEYWORDS = [
+  "common",
+  "central",
+  "hall",
+  "lobby",
+  "plaza",
+  "street",
+  "activity",
+  "public",
+  "square",
+  "atrium",
+  "courtyard",
+  "公共",
+  "中央",
+  "大厅",
+  "广场",
+  "主街",
+  "活动区",
+  "公区",
+  "中庭",
+  "院落",
+];
+
+const PRIVATE_REGION_KEYWORDS = [
+  "cell",
+  "room",
+  "bedroom",
+  "private",
+  "office",
+  "storage",
+  "toilet",
+  "bathroom",
+  "kitchen",
+  "hut",
+  "house",
+  "囚室",
+  "房间",
+  "卧室",
+  "牢房",
+  "办公室",
+  "储藏",
+  "厕所",
+  "卫生间",
+  "厨房",
+  "小屋",
+];
+
+const PUBLIC_HUB_MIN_AREA_RATIO = parseFloat(
+  process.env.PRIMARY_PUBLIC_HUB_MIN_AREA_RATIO || "0.08",
+);
+const PUBLIC_HUB_MIN_DIMENSION_TILES = parseInt(
+  process.env.PRIMARY_PUBLIC_HUB_MIN_DIMENSION_TILES || "8",
+  10,
+);
+
+function findPrimaryPublicHubRegion(tmjRegions, worldDesign, tmj) {
+  if (!Array.isArray(tmjRegions) || tmjRegions.length === 0 || !tmj) {
+    return null;
+  }
+
+  const anchoredRegionIds = getAnchoredRegionIds(worldDesign);
+  const worldArea = Math.max(1, (tmj.width || 0) * (tmj.height || 0) * (tmj.tilewidth || 32) ** 2);
+  const minDimensionPx = (tmj.tilewidth || 32) * PUBLIC_HUB_MIN_DIMENSION_TILES;
+  const candidates = tmjRegions.filter((region) => {
+    const identifiers = getRegionIdentifiers(region);
+    if (identifiers.some((id) => anchoredRegionIds.has(id))) {
+      return false;
+    }
+
+    const text = getRegionSearchText(region, worldDesign);
+    if (!containsKeyword(text, PUBLIC_HUB_KEYWORDS)) {
+      return false;
+    }
+    if (containsKeyword(text, PRIVATE_REGION_KEYWORDS)) {
+      return false;
+    }
+
+    const area = getRegionArea(region);
+    const areaRatio = area / worldArea;
+    const hasLargeArea = areaRatio >= PUBLIC_HUB_MIN_AREA_RATIO;
+    const hasLargeDimensions =
+      (region.width || 0) >= minDimensionPx && (region.height || 0) >= minDimensionPx;
+    return hasLargeArea || hasLargeDimensions;
+  });
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return candidates.sort((a, b) => getRegionArea(b) - getRegionArea(a))[0];
+}
+
+function getAnchoredRegionIds(worldDesign) {
+  const anchoredIds = new Set();
+  for (const character of worldDesign.characters || []) {
+    const anchor = character.anchor;
+    if (anchor?.type !== "region" || typeof anchor.targetId !== "string") {
+      continue;
+    }
+    anchoredIds.add(normalizeIdentifier(anchor.targetId));
+  }
+  return anchoredIds;
+}
+
+function getRegionSearchText(region, worldDesign) {
+  const props = getObjectProperties(region);
+  const regionId = getRegionId(region);
+  const designedLoc = findMatchingLocation(
+    regionId,
+    props,
+    worldDesign.regions || worldDesign.locations || [],
+  );
+  return [
+    regionId,
+    region.name,
+    props.name,
+    props.description,
+    designedLoc?.id,
+    designedLoc?.name,
+    designedLoc?.description,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function containsKeyword(text, keywords) {
+  return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+}
+
+function getRegionIdentifiers(region) {
+  const props = getObjectProperties(region);
+  return [
+    props.id,
+    region.name,
+    region.name?.toLowerCase().replace(/\s+/g, "_"),
+    `region_${region.id}`,
+  ]
+    .filter(Boolean)
+    .map(normalizeIdentifier);
+}
+
+function getRegionArea(region) {
+  return Math.max(0, region.width || 0) * Math.max(0, region.height || 0);
+}
+
+function getObjectProperties(obj) {
+  const props = {};
+  (obj.properties || []).forEach((p) => {
+    props[p.name] = p.value;
+  });
+  return props;
+}
+
+function getRegionId(region) {
+  const props = getObjectProperties(region);
+  return props.id || region.name?.toLowerCase().replace(/\s+/g, "_") || `region_${region.id}`;
+}
+
+function normalizeIdentifier(value) {
+  return String(value).trim().toLowerCase().replace(/\s+/g, "_");
 }
 
 function findMatchingLocation(regionId, regionProps, designedLocations) {
