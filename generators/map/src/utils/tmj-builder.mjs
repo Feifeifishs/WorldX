@@ -57,6 +57,7 @@ export function buildTMJ({
     properties: [
       { name: "objectId", type: "string", value: obj.id },
       { name: "interactions", type: "string", value: JSON.stringify(obj.suggestedInteractions || []) },
+      ...(obj.externalUrl ? [{ name: "externalUrl", type: "string", value: obj.externalUrl }] : []),
     ],
   }));
 

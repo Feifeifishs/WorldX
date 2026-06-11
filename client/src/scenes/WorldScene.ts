@@ -828,7 +828,9 @@ export class WorldScene extends Phaser.Scene {
         this.interactiveHoverGraphics.strokeRoundedRect(object.x, object.y, object.width, object.height, 4);
         
         // Show label
-        this.interactiveHoverLabelText.setText(object.name || object.objectId);
+        this.interactiveHoverLabelText.setText(
+          object.externalUrl ? `${object.name || object.objectId} ↗` : object.name || object.objectId,
+        );
         
         // Measure text bounds to draw a nice rounded background
         const textWidth = this.interactiveHoverLabelText.width;
@@ -855,6 +857,14 @@ export class WorldScene extends Phaser.Scene {
         
         this.interactiveHoverLabelContainer.setPosition(containerX, containerY);
         this.interactiveHoverLabelContainer.setVisible(true);
+        if (object.externalUrl) {
+          this.input.setDefaultCursor("pointer");
+        }
+      });
+
+      zone.on("pointerup", () => {
+        if (!object.externalUrl) return;
+        window.open(object.externalUrl, "_blank", "noopener,noreferrer");
       });
       
       zone.on("pointerout", () => {
@@ -862,6 +872,7 @@ export class WorldScene extends Phaser.Scene {
           if (!this.interactiveHoverGraphics || !this.interactiveHoverLabelContainer) return;
           this.interactiveHoverGraphics.clear();
           this.interactiveHoverLabelContainer.setVisible(false);
+          this.input.setDefaultCursor("default");
           currentHoveredObjectId = null;
         }
       });

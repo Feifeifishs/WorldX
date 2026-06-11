@@ -29,6 +29,7 @@ function prepareInteractiveElements(worldDesign) {
     description: el.description,
     visualDescription: el.visualDescription,
     placementHint: el.placementHint,
+    externalUrl: el.externalUrl,
     interactions: el.interactions || [],
   }));
 

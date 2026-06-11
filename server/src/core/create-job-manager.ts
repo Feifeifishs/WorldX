@@ -20,6 +20,7 @@ const MAX_EVENT_BUFFER = 500;
 const MAX_LOG_BUFFER = 2000;
 
 type PhaseId = 1 | 2 | 3 | 4;
+type GenerationMode = "world" | "proxy_classroom";
 
 export type JobEvent =
   | { kind: "job_started"; at: number; jobId: string; prompt: string; sizeK: 1 | 2 | 4 }
@@ -134,7 +135,13 @@ class CreateJobManager extends EventEmitter {
     this.finishError(job, "Generation stopped by user");
   }
 
-  startJob(params: { prompt: string; sizeK: 1 | 2 | 4; keepArtifacts?: boolean }): { jobId: string } {
+  startJob(params: {
+    prompt: string;
+    sizeK: 1 | 2 | 4;
+    keepArtifacts?: boolean;
+    mode?: GenerationMode;
+    proxyClassroom?: unknown;
+  }): { jobId: string } {
     if (this.hasActiveJob()) {
       throw new JobConflictError(this.current!.jobId);
     }
@@ -148,6 +155,7 @@ class CreateJobManager extends EventEmitter {
     }
 
     const jobId = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const generationMode: GenerationMode = params.mode === "proxy_classroom" ? "proxy_classroom" : "world";
 
     const child = spawn(
       process.execPath,
@@ -158,6 +166,10 @@ class CreateJobManager extends EventEmitter {
           ...process.env,
           MAP_IMAGE_SIZE_K: String(params.sizeK),
           KEEP_GENERATION_ARTIFACTS: params.keepArtifacts ? "1" : "0",
+          WORLDX_GENERATION_MODE: generationMode,
+          PROXY_CLASSROOM_PAYLOAD: params.proxyClassroom
+            ? JSON.stringify(params.proxyClassroom)
+            : "",
           FORCE_COLOR: "0",
         },
         stdio: ["ignore", "pipe", "pipe"],

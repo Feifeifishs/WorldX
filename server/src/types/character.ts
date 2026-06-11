@@ -27,6 +27,10 @@ export interface CharacterProfile {
   socialStyle: "extrovert" | "introvert_selective" | "introvert";
   extraversionLevel: number;
   intuitionLevel: number;
+  gameplayTags: string[];
+  interests: string[];
+  comfortTopics: string[];
+  socialSafetyLevel?: "gentle" | "very_gentle" | "guided";
 
   skills: string[];
   writeDiary: boolean;

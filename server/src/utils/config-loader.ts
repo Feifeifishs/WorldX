@@ -155,6 +155,10 @@ function normalizeCharacterProfile(raw: any): CharacterProfile | null {
     socialStyle,
     extraversionLevel,
     intuitionLevel,
+    gameplayTags: toStringArray(raw.gameplayTags),
+    interests: toStringArray(raw.interests),
+    comfortTopics: toStringArray(raw.comfortTopics),
+    socialSafetyLevel: normalizeSocialSafetyLevel(raw.socialSafetyLevel),
     skills: Array.isArray(raw.skills) ? raw.skills : [],
     writeDiary: raw.writeDiary ?? true,
     fourthWallCandidate: raw.fourthWallCandidate ?? false,
@@ -164,6 +168,12 @@ function normalizeCharacterProfile(raw: any): CharacterProfile | null {
     iconicCues: normalizeIconicCues(raw.iconicCues),
     canonicalRefs: normalizeCanonicalRefs(raw.canonicalRefs),
   };
+}
+
+function normalizeSocialSafetyLevel(value: unknown): CharacterProfile["socialSafetyLevel"] {
+  return value === "gentle" || value === "very_gentle" || value === "guided"
+    ? value
+    : undefined;
 }
 
 function normalizeAnchor(raw: unknown): CharacterAnchor | undefined {

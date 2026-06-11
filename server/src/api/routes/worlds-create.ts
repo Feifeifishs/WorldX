@@ -9,11 +9,25 @@ import {
 const router = Router();
 
 router.post("/create", (req, res) => {
-  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+  const mode = req.body?.mode === "proxy_classroom" ? "proxy_classroom" : "world";
+  const proxyClassroom =
+    mode === "proxy_classroom"
+      ? sanitizeProxyClassroomPayload(req.body?.proxyClassroom)
+      : undefined;
+  const prompt =
+    mode === "proxy_classroom" && proxyClassroom
+      ? buildProxyClassroomPrompt(proxyClassroom)
+      : typeof req.body?.prompt === "string"
+        ? req.body.prompt
+        : "";
   const sizeKRaw = req.body?.sizeK;
   const sizeK = Number(sizeKRaw) as 1 | 2 | 4;
   const keepArtifacts = req.body?.keepArtifacts === true;
 
+  if (mode === "proxy_classroom" && (!proxyClassroom || proxyClassroom.students.length === 0)) {
+    res.status(400).json({ error: "at least one student is required for proxy classroom mode" });
+    return;
+  }
   if (!prompt.trim()) {
     res.status(400).json({ error: "prompt is required" });
     return;
@@ -24,7 +38,13 @@ router.post("/create", (req, res) => {
   }
 
   try {
-    const { jobId } = createJobManager.startJob({ prompt, sizeK, keepArtifacts });
+    const { jobId } = createJobManager.startJob({
+      prompt,
+      sizeK,
+      keepArtifacts,
+      mode,
+      proxyClassroom,
+    });
     res.json({ ok: true, jobId });
   } catch (err) {
     if (err instanceof JobConflictError) {
@@ -38,6 +58,113 @@ router.post("/create", (req, res) => {
     res.status(500).json({ error: message });
   }
 });
+
+type SocialSafetyLevel = "gentle" | "very_gentle" | "guided";
+
+interface ProxyClassroomStudentPayload {
+  name: string;
+  interests: string;
+  favoriteMusic: string;
+  comfortTopics: string;
+  socialSafetyLevel: SocialSafetyLevel;
+  notes: string;
+}
+
+interface ProxyClassroomPayload {
+  schoolName: string;
+  schoolUrl: string;
+  students: ProxyClassroomStudentPayload[];
+}
+
+function sanitizeProxyClassroomPayload(raw: unknown): ProxyClassroomPayload {
+  const obj = isRecord(raw) ? raw : {};
+  const studentsRaw = Array.isArray(obj.students) ? obj.students : [];
+  const students = studentsRaw
+    .slice(0, 12)
+    .map((student, index) => sanitizeStudent(student, index))
+    .filter((student) =>
+      Boolean(
+        student.name ||
+        student.interests ||
+        student.favoriteMusic ||
+        student.comfortTopics ||
+        student.notes,
+      ),
+    );
+
+  return {
+    schoolName: sanitizeText(obj.schoolName, 80) || "代理教室",
+    schoolUrl: sanitizeHttpUrl(obj.schoolUrl),
+    students,
+  };
+}
+
+function sanitizeStudent(raw: unknown, index: number): ProxyClassroomStudentPayload {
+  const obj = isRecord(raw) ? raw : {};
+  return {
+    name: sanitizeText(obj.name, 40) || `学生${index + 1}`,
+    interests: sanitizeText(obj.interests, 160),
+    favoriteMusic: sanitizeText(obj.favoriteMusic, 120),
+    comfortTopics: sanitizeText(obj.comfortTopics, 160),
+    socialSafetyLevel: normalizeSocialSafetyLevel(obj.socialSafetyLevel),
+    notes: sanitizeText(obj.notes, 160),
+  };
+}
+
+function buildProxyClassroomPrompt(payload: ProxyClassroomPayload): string {
+  const studentLines = payload.students
+    .map((student, index) =>
+      [
+        `${index + 1}. ${student.name}`,
+        student.interests ? `兴趣: ${student.interests}` : "",
+        student.favoriteMusic ? `喜欢的音乐: ${student.favoriteMusic}` : "",
+        student.comfortTopics ? `想聊/舒适话题: ${student.comfortTopics}` : "",
+        `交流安全等级: ${student.socialSafetyLevel}`,
+        student.notes ? `备注: ${student.notes}` : "",
+      ].filter(Boolean).join("；"),
+    )
+    .join("\n");
+
+  const landmarkLine = payload.schoolUrl
+    ? `学校地标建筑需要包含“${payload.schoolName}”，并把 externalUrl 设置为 ${payload.schoolUrl}。`
+    : `学校地标建筑需要包含“${payload.schoolName}”。`;
+
+  return [
+    "创建一个独立的代理教室模式世界，而不是普通自由 prompt 世界。",
+    "用户只提供了学生基础资料；请据此生成安全班级或校园兴趣小镇。",
+    landmarkLine,
+    "角色决策要基于共同兴趣、舒适话题和 socialSafetyLevel，避免排挤、羞辱、危险刺激和强迫深聊。",
+    "学生资料：",
+    studentLines,
+  ].join("\n");
+}
+
+function sanitizeText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function sanitizeHttpUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSocialSafetyLevel(value: unknown): SocialSafetyLevel {
+  return value === "very_gentle" || value === "guided" || value === "gentle"
+    ? value
+    : "gentle";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 router.get("/jobs/current", (_req, res) => {
   const jobId = createJobManager.getCurrentJobId();

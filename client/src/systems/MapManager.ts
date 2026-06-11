@@ -14,6 +14,7 @@ export interface LocationRect {
 export interface InteractiveObject {
   objectId: string;
   name: string;
+  externalUrl?: string;
   x: number;
   y: number;
   width: number;
@@ -109,10 +110,12 @@ export class MapManager {
     for (const obj of layer.objects) {
       const props: any[] = obj.properties || [];
       const objectId = props.find((p: any) => p.name === "objectId")?.value;
+      const externalUrl = props.find((p: any) => p.name === "externalUrl")?.value;
       if (!objectId) continue;
       this.interactiveObjects.set(objectId, {
         objectId,
         name: obj.name || objectId,
+        externalUrl: typeof externalUrl === "string" ? externalUrl : undefined,
         x: obj.x,
         y: obj.y,
         width: obj.width || 0,

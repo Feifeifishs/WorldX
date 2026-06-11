@@ -169,8 +169,16 @@ function normalizeInteractiveElement(element, index) {
     description: element?.description || "",
     visualDescription: element?.visualDescription || "",
     placementHint: element?.placementHint || "",
+    externalUrl: normalizeExternalUrl(element?.externalUrl),
     interactions,
   };
+}
+
+function normalizeExternalUrl(value) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return undefined;
+  return trimmed;
 }
 
 function normalizeWorldSocialContext(value, fallback = "") {
@@ -252,6 +260,10 @@ export function normalizeWorldDesign(rawDesign) {
     ? rawDesign.characters.map((char) => ({
         ...char,
         anchor: normalizeCharacterAnchor(char?.anchor),
+        gameplayTags: toStringArray(char?.gameplayTags),
+        interests: toStringArray(char?.interests),
+        comfortTopics: toStringArray(char?.comfortTopics),
+        socialSafetyLevel: normalizeSocialSafetyLevel(char?.socialSafetyLevel),
       }))
     : [];
 
@@ -297,4 +309,18 @@ export function normalizeWorldDesign(rawDesign) {
     worldActions,
     mapPlan: deriveMapPlan(rawDesign?.mapPlan, regions),
   };
+}
+
+function normalizeSocialSafetyLevel(value) {
+  if (value === "very_gentle" || value === "guided" || value === "gentle") {
+    return value;
+  }
+  return undefined;
+}
+
+function toStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0);
 }

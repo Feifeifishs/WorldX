@@ -52,6 +52,10 @@ export interface CharacterProfile {
   speakingStyle: string;
   fears: string[];
   socialStyle: string;
+  gameplayTags?: string[];
+  interests?: string[];
+  comfortTopics?: string[];
+  socialSafetyLevel?: "gentle" | "very_gentle" | "guided";
   tags: string[];
   [key: string]: unknown;
 }

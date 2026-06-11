@@ -38,6 +38,10 @@ async function main() {
   }
 
   const worldId = `world_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
+  const generationMode = process.env.WORLDX_GENERATION_MODE === "proxy_classroom"
+    ? "proxy_classroom"
+    : "world";
+  const proxyClassroom = parseProxyClassroomPayload(process.env.PROXY_CLASSROOM_PAYLOAD);
   const worldDir = join(ROOT, "output/worlds", worldId);
   mkdirSync(worldDir, { recursive: true });
   const logsDir = join(worldDir, "logs");
@@ -50,7 +54,10 @@ async function main() {
   console.log(`Prompt:   ${userPrompt}\n`);
 
   console.log("━━━ Phase 1: Designing World ━━━");
-  const worldDesign = await designWorld(userPrompt);
+  const worldDesign = await designWorld(userPrompt, {
+    mode: generationMode,
+    proxyClassroom,
+  });
   writeFileSync(join(worldDir, "world-design.json"), JSON.stringify(worldDesign, null, 2));
 
   const mapDir = join(worldDir, "map");
@@ -87,7 +94,7 @@ async function main() {
   const { worldConfig, characterConfigs, sceneConfig } = generateConfigs(
     worldDesign,
     worldDir,
-    { originalPrompt: userPrompt },
+    { originalPrompt: userPrompt, generationMode, proxyClassroom },
   );
 
   if (!KEEP_GENERATION_ARTIFACTS) {
@@ -107,6 +114,17 @@ async function main() {
   console.log(`  Output:     ${worldDir}`);
   console.log(`\n  To run:     WORLD_ID=${worldId} npm run dev`);
   console.log();
+}
+
+function parseProxyClassroomPayload(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    console.warn("[WorldX] Failed to parse PROXY_CLASSROOM_PAYLOAD; continuing without it.");
+    return null;
+  }
 }
 
 async function generateMapAssets({ mapDir, worldDir, logsDir, mapScript, mapDescription, originalPrompt }) {

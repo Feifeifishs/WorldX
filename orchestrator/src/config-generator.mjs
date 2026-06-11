@@ -85,6 +85,8 @@ export function generateConfigs(worldDesign, worldDir, options = {}) {
       worldDescription: normalizedDesign.worldDescription,
       worldSocialContext: normalizedDesign.worldSocialContext || normalizedDesign.worldDescription,
       originalPrompt,
+      generationMode: options.generationMode || "world",
+      proxyClassroom: options.proxyClassroom || undefined,
       sceneType: normalizedDesign.sceneType,
       timeConfig: normalizedDesign.timeConfig,
       multiDay: normalizedDesign.multiDay,
@@ -160,6 +162,10 @@ export function generateConfigs(worldDesign, worldDir, options = {}) {
       motivation: charDesign.motivation,
       socialStyle: charDesign.socialStyle,
       startPosition: startPos,
+      gameplayTags: toStringArray(charDesign.gameplayTags),
+      interests: toStringArray(charDesign.interests),
+      comfortTopics: toStringArray(charDesign.comfortTopics),
+      socialSafetyLevel: normalizeSocialSafetyLevel(charDesign.socialSafetyLevel),
       initialMemories: [...backgroundMemories, ...signatureMemories],
     };
 
@@ -225,6 +231,7 @@ function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj, options = {}) 
       worldDesign.worldName || "Main Area",
       worldDesign.worldDescription || "",
     );
+    appendMissingDesignedLocations(locations, designedRegions);
 
     // Attach public-hub and element objects to main_area
     if (primaryHubObjects.length > 0 || elementObjects.length > 0) {
@@ -273,6 +280,48 @@ function buildLocations(tmjRegions, tmjObjects, worldDesign, tmj, options = {}) 
   ], worldDesign.worldName || "Main Area", worldDesign.worldDescription || "");
 }
 
+function appendMissingDesignedLocations(locations, designedRegions) {
+  const existingIds = new Set(locations.map((location) => location.id));
+  const missingLocations = designedRegions
+    .filter((region) => region?.id && !existingIds.has(region.id))
+    .map((region) => ({
+      id: region.id,
+      name: region.name || region.id,
+      description: region.description || "",
+      adjacentLocations: ["main_area"],
+      objects: (region.interactions || []).map((inter) => ({
+        id: inter.id || `${region.id}_action`,
+        name: inter.name || inter.id || `${region.name || region.id}行动`,
+        locationId: region.id,
+        defaultState: "available",
+        capacity: 2,
+        interactions: [
+          {
+            id: inter.id,
+            name: inter.name,
+            description: inter.description || "",
+            availableWhenState: inter.availableWhenState || ["available"],
+            duration: inter.duration || 2,
+            effects: inter.effects || [],
+            repeatable: inter.repeatable ?? true,
+            ...(inter.requiresAnchor === true ? { requiresAnchor: true } : {}),
+          },
+        ],
+      })),
+    }));
+
+  if (missingLocations.length === 0) return;
+  const mainArea = locations.find((location) => location.id === "main_area");
+  if (mainArea) {
+    const adjacent = new Set(mainArea.adjacentLocations || []);
+    for (const location of missingLocations) {
+      adjacent.add(location.id);
+    }
+    mainArea.adjacentLocations = [...adjacent];
+  }
+  locations.push(...missingLocations);
+}
+
 function buildObjectsForRegion(locationId, region, tmjObjects, designedRegions) {
   const props = getObjectProperties(region);
   const regionId = getRegionId(region);
@@ -300,6 +349,7 @@ function buildObjectsForRegion(locationId, region, tmjObjects, designedRegions) 
         locationId,
         defaultState: "available",
         capacity: 1,
+        ...(objProps.externalUrl ? { externalUrl: objProps.externalUrl } : {}),
         interactions: interactions.map((inter) => ({
           id: inter.id || inter.name?.toLowerCase().replace(/\s+/g, "_"),
           name: inter.name || inter.id,
@@ -358,6 +408,7 @@ function buildElementObjects(designedElements, tmjObjects) {
       locationId: "main_area",
       defaultState: "available",
       capacity: 2,
+      ...(element.externalUrl ? { externalUrl: element.externalUrl } : {}),
       interactions,
     };
   });
@@ -845,6 +896,12 @@ function toStringArray(value) {
   return value
     .map((v) => (typeof v === "string" ? v.trim() : ""))
     .filter((v) => v.length > 0);
+}
+
+function normalizeSocialSafetyLevel(value) {
+  return value === "very_gentle" || value === "guided" || value === "gentle"
+    ? value
+    : undefined;
 }
 
 function normalizeIconicCues(raw) {

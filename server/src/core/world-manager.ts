@@ -57,7 +57,7 @@ export class WorldManager {
   private worldName = "unknown";
   private worldDescription = "";
   private worldSocialContext = "";
-  private contentLanguage: "zh" | "en" = "zh";
+  private contentLanguage: "zh" | "en" | "ja" = "zh";
   private originalPrompt = "";
 
   constructor() {}
@@ -110,7 +110,7 @@ export class WorldManager {
     return this.worldSocialContext;
   }
 
-  getContentLanguage(): "zh" | "en" {
+  getContentLanguage(): "zh" | "en" | "ja" {
     return this.contentLanguage;
   }
 

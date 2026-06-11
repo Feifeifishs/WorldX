@@ -32,8 +32,11 @@ let initialized = false;
 const ENGLISH_LANG_HINT =
   "\n\n[LANGUAGE] This world uses English. ALL your output — dialogue lines, action labels, inner monologue, reasoning, memory summaries, and every other user-visible string — MUST be written in English.";
 
+const JAPANESE_LANG_HINT =
+  "\n\n[LANGUAGE] This world is set in Japan and uses Japanese. ALL your user-visible output — dialogue lines, action labels, inner monologue, reasoning, memory summaries, diary entries, and tags — MUST be written in natural Japanese. Keep student dialogue age-appropriate for Japanese junior high school first-year students; use polite or casual Japanese according to each character's relationship and personality. Do not answer in Chinese or English unless a character is explicitly quoting a foreign word or song/title.";
+
 export class PromptBuilder {
-  private contentLanguage: "zh" | "en" = "zh";
+  private contentLanguage: "zh" | "en" | "ja" = "zh";
 
   initialize(): void {
     for (const name of TEMPLATE_NAMES) {
@@ -42,7 +45,7 @@ export class PromptBuilder {
     initialized = true;
   }
 
-  setContentLanguage(lang: "zh" | "en"): void {
+  setContentLanguage(lang: "zh" | "en" | "ja"): void {
     this.contentLanguage = lang;
   }
 
@@ -53,6 +56,8 @@ export class PromptBuilder {
     });
     if (this.contentLanguage === "en") {
       result += ENGLISH_LANG_HINT;
+    } else if (this.contentLanguage === "ja") {
+      result += JAPANESE_LANG_HINT;
     }
     return result;
   }
@@ -93,6 +98,7 @@ export class PromptBuilder {
       perceptionText,
       relevantMemories: params.relevantMemories || "（无相关记忆）",
       actionMenu: params.actionMenu,
+      socialProfileBlock: formatSocialProfileBlock(profile),
       iconicCuesBlock: formatIconicCuesBlock(profile),
     });
 
@@ -139,6 +145,7 @@ export class PromptBuilder {
       memoriesBaboutA: b.memoriesAboutOther || "（无）",
 
       worldSocialContext: formatWorldSocialContext(params.worldSocialContext),
+      pairSocialBridgeBlock: formatPairSocialBridgeBlock(a.profile, b.profile),
       location,
       day: String(gameTime.day),
       timeString,
@@ -211,6 +218,7 @@ export class PromptBuilder {
       currentTurnCount: String(params.totalTurns),
       knownCharacters: params.knownCharacters || "（无）",
       knownLocations: params.knownLocations || "（无）",
+      pairSocialBridgeBlock: formatPairSocialBridgeBlock(a.profile, b.profile),
       iconicCuesBlock: formatIconicCuesBlockForPair(a.profile, b.profile),
     });
 
@@ -323,6 +331,7 @@ export class PromptBuilder {
       coreMotivation: profile.coreMotivation,
       emotionLabel,
       memoriesBlock: params.memoriesBlock || "（没什么特别相关的记忆浮上来）",
+      socialProfileBlock: formatSocialProfileBlock(profile),
       iconicCuesBlock: formatIconicCuesBlock(profile),
       userIdentityBlock,
       transcript: transcriptText,
@@ -502,6 +511,53 @@ function buildIconicCuesText(profile: CharacterProfile): string {
   }
 
   return lines.join("\n");
+}
+
+function formatSocialProfileBlock(profile: CharacterProfile): string {
+  const lines: string[] = [];
+  if (profile.interests?.length) {
+    lines.push(`- interests: ${profile.interests.join(", ")}`);
+  }
+  if (profile.comfortTopics?.length) {
+    lines.push(`- comfortTopics: ${profile.comfortTopics.join(", ")}`);
+  }
+  if (profile.gameplayTags?.length) {
+    lines.push(`- gameplayTags: ${profile.gameplayTags.join(", ")}`);
+  }
+  if (profile.socialSafetyLevel) {
+    lines.push(`- socialSafetyLevel: ${profile.socialSafetyLevel}`);
+  }
+  return lines.length > 0 ? lines.join("\n") : "(no explicit social-interest profile)";
+}
+
+function formatPairSocialBridgeBlock(
+  a: CharacterProfile,
+  b: CharacterProfile,
+): string {
+  const aTerms = getSocialTerms(a);
+  const bTerms = getSocialTerms(b);
+  const shared = aTerms.filter((term) => bTerms.includes(term));
+  const lines = [
+    `- ${a.name}: ${formatSocialProfileBlock(a)}`,
+    `- ${b.name}: ${formatSocialProfileBlock(b)}`,
+  ];
+  lines.push(
+    shared.length > 0
+      ? `- sharedInterestBridge: ${shared.join(", ")}`
+      : "- sharedInterestBridge: no exact shared tags; use gentle curiosity and safe adjacent topics.",
+  );
+  return lines.join("\n");
+}
+
+function getSocialTerms(profile: CharacterProfile): string[] {
+  const terms = [
+    ...(profile.interests ?? []),
+    ...(profile.comfortTopics ?? []),
+    ...(profile.gameplayTags ?? []),
+  ]
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(terms));
 }
 
 export const promptBuilder = new PromptBuilder();

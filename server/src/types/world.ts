@@ -54,6 +54,7 @@ export interface ObjectConfig {
   locationId: string;
   defaultState: string;
   capacity: number;
+  externalUrl?: string;
   interactions: InteractionConfig[];
 }
 
@@ -104,7 +105,7 @@ export interface WorldConfig {
   worldName?: string;
   worldDescription?: string;
   worldSocialContext?: string;
-  contentLanguage?: "zh" | "en";
+  contentLanguage?: "zh" | "en" | "ja";
   originalPrompt?: string;
   scene?: SceneConfig;
   worldActions?: WorldActionConfig[];

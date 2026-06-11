@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, Dispatch, SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiClient,
@@ -13,14 +13,37 @@ import {
   type CreateJobEvent,
   type CreateJobPhase,
   type CreateJobSizeK,
+  type CreateWorldMode,
   type CreateJobSnapshot,
   type GeneratedWorldSummary,
+  type ProxyClassroomCreateInput,
+  type SocialSafetyLevel,
 } from "../services/api-client";
 import { CreateWorldBackground } from "./CreateWorldBackground";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { sortLibraryWorldsForLocale } from "../utils/library-world-sort";
 
 type Mode = "input" | "running" | "done" | "error";
+
+type ProxyStudentDraft = {
+  name: string;
+  interests: string;
+  favoriteMusic: string;
+  comfortTopics: string;
+  socialSafetyLevel: SocialSafetyLevel;
+  notes: string;
+};
+
+const DEFAULT_PROXY_STUDENT: ProxyStudentDraft = {
+  name: "",
+  interests: "",
+  favoriteMusic: "",
+  comfortTopics: "",
+  socialSafetyLevel: "gentle",
+  notes: "",
+};
+
+const DEFAULT_SCHOOL_NAME = "武藏野学艺专门学校";
 
 const PROMPT_EXAMPLES = [
   "末日超市：世界末日后，仅存的 6 个幸存者挤在一个封闭的超市里。有公司高管、下岗程序员、大学教授、宅男、退休军人和一个小学生",
@@ -40,7 +63,15 @@ export function CreateWorldPage({
     return new URLSearchParams(window.location.search).get("dev") === "1";
   }, []);
   const [mode, setMode] = useState<Mode>("input");
+  const [createMode, setCreateMode] = useState<CreateWorldMode>("world");
   const [prompt, setPrompt] = useState("");
+  const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_NAME);
+  const [schoolUrl, setSchoolUrl] = useState("");
+  const [proxyStudents, setProxyStudents] = useState<ProxyStudentDraft[]>([
+    { ...DEFAULT_PROXY_STUDENT },
+    { ...DEFAULT_PROXY_STUDENT },
+    { ...DEFAULT_PROXY_STUDENT },
+  ]);
   const [sizeK, setSizeK] = useState<CreateJobSizeK>(2);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -161,7 +192,17 @@ export function CreateWorldPage({
   }, [mode, snapshot?.worldId]);
 
   const onSubmit = useCallback(async () => {
-    if (!prompt.trim()) {
+    const proxyClassroom = buildProxyClassroomPayload(schoolName, schoolUrl, proxyStudents);
+    const effectivePrompt =
+      createMode === "proxy_classroom"
+        ? summarizeProxyClassroomPrompt(proxyClassroom)
+        : prompt.trim();
+
+    if (createMode === "proxy_classroom" && proxyClassroom.students.length === 0) {
+      setSubmitError("请至少填写一名学生的基本信息。");
+      return;
+    }
+    if (!effectivePrompt.trim()) {
       setSubmitError(t("create.emptyError"));
       return;
     }
@@ -171,9 +212,11 @@ export function CreateWorldPage({
     setSnapshot(null);
     try {
       const { jobId: id } = await apiClient.createWorld({
-        prompt: prompt.trim(),
+        prompt: effectivePrompt,
         sizeK,
         keepArtifacts,
+        mode: createMode,
+        proxyClassroom: createMode === "proxy_classroom" ? proxyClassroom : undefined,
       });
       setJobId(id);
       setCancelingJob(false);
@@ -188,7 +231,7 @@ export function CreateWorldPage({
     } finally {
       setSubmitting(false);
     }
-  }, [prompt, sizeK, keepArtifacts]);
+  }, [createMode, schoolName, schoolUrl, proxyStudents, prompt, sizeK, keepArtifacts, t]);
 
   const onAttachToConflict = useCallback(() => {
     if (!conflictJobId) return;
@@ -243,8 +286,16 @@ export function CreateWorldPage({
 
         {mode === "input" && (
           <InputView
+            createMode={createMode}
+            setCreateMode={setCreateMode}
             prompt={prompt}
             setPrompt={setPrompt}
+            schoolName={schoolName}
+            setSchoolName={setSchoolName}
+            schoolUrl={schoolUrl}
+            setSchoolUrl={setSchoolUrl}
+            proxyStudents={proxyStudents}
+            setProxyStudents={setProxyStudents}
             sizeK={sizeK}
             setSizeK={setSizeK}
             submitting={submitting}
@@ -278,8 +329,16 @@ export function CreateWorldPage({
 }
 
 function InputView({
+  createMode,
+  setCreateMode,
   prompt,
   setPrompt,
+  schoolName,
+  setSchoolName,
+  schoolUrl,
+  setSchoolUrl,
+  proxyStudents,
+  setProxyStudents,
   sizeK,
   setSizeK,
   submitting,
@@ -291,8 +350,16 @@ function InputView({
   loadingSampleWorld,
   onLoadSampleWorld,
 }: {
+  createMode: CreateWorldMode;
+  setCreateMode: (value: CreateWorldMode) => void;
   prompt: string;
   setPrompt: (value: string) => void;
+  schoolName: string;
+  setSchoolName: (value: string) => void;
+  schoolUrl: string;
+  setSchoolUrl: (value: string) => void;
+  proxyStudents: ProxyStudentDraft[];
+  setProxyStudents: Dispatch<SetStateAction<ProxyStudentDraft[]>>;
   sizeK: CreateJobSizeK;
   setSizeK: (value: CreateJobSizeK) => void;
   submitting: boolean;
@@ -321,18 +388,37 @@ function InputView({
       <h1 style={taglineStyle}>{t("create.tagline")}</h1>
       <p style={subTaglineStyle}>{t("create.subtitle")}</p>
 
-      <label style={labelStyle}>{t("create.promptLabel")}</label>
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder={t("create.promptPlaceholder")}
-        style={textareaStyle}
-        rows={5}
-        spellCheck={false}
-      />
-      <div style={examplesRowStyle}>
-        <span style={examplesLabelStyle}>{t("create.tryLabel")}</span>
-        {PROMPT_EXAMPLES.map((example, idx) => (
+      <div style={modeSwitchStyle}>
+        <button
+          type="button"
+          onClick={() => setCreateMode("world")}
+          style={modeSwitchButtonStyle(createMode === "world")}
+        >
+          自由世界
+        </button>
+        <button
+          type="button"
+          onClick={() => setCreateMode("proxy_classroom")}
+          style={modeSwitchButtonStyle(createMode === "proxy_classroom")}
+        >
+          代理教室
+        </button>
+      </div>
+
+      {createMode === "world" ? (
+        <>
+          <label style={labelStyle}>{t("create.promptLabel")}</label>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={t("create.promptPlaceholder")}
+            style={textareaStyle}
+            rows={5}
+            spellCheck={false}
+          />
+          <div style={examplesRowStyle}>
+            <span style={examplesLabelStyle}>{t("create.tryLabel")}</span>
+            {PROMPT_EXAMPLES.map((example, idx) => (
           <button
             key={idx}
             type="button"
@@ -342,8 +428,19 @@ function InputView({
           >
             {truncate(example, 32)}
           </button>
-        ))}
-      </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <ProxyClassroomInput
+          schoolName={schoolName}
+          setSchoolName={setSchoolName}
+          schoolUrl={schoolUrl}
+          setSchoolUrl={setSchoolUrl}
+          students={proxyStudents}
+          setStudents={setProxyStudents}
+        />
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 24, marginBottom: 8 }}>
         <label style={{ ...labelStyle, marginTop: 0 }}>{t("create.fidelityLabel")}</label>
@@ -381,8 +478,8 @@ function InputView({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={submitting || !prompt.trim()}
-          style={primaryBtnStyle(submitting || !prompt.trim())}
+          disabled={submitting || !canSubmitCreateForm(createMode, prompt, proxyStudents)}
+          style={primaryBtnStyle(submitting || !canSubmitCreateForm(createMode, prompt, proxyStudents))}
         >
           {submitting ? t("create.starting") : t("create.createBtn")}
         </button>
@@ -415,6 +512,156 @@ function InputView({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ProxyClassroomInput({
+  schoolName,
+  setSchoolName,
+  schoolUrl,
+  setSchoolUrl,
+  students,
+  setStudents,
+}: {
+  schoolName: string;
+  setSchoolName: (value: string) => void;
+  schoolUrl: string;
+  setSchoolUrl: (value: string) => void;
+  students: ProxyStudentDraft[];
+  setStudents: Dispatch<SetStateAction<ProxyStudentDraft[]>>;
+}) {
+  const updateStudent = (
+    index: number,
+    patch: Partial<ProxyStudentDraft>,
+  ) => {
+    setStudents((prev) =>
+      prev.map((student, idx) => (idx === index ? { ...student, ...patch } : student)),
+    );
+  };
+
+  const removeStudent = (index: number) => {
+    setStudents((prev) =>
+      prev.length <= 1 ? prev : prev.filter((_student, idx) => idx !== index),
+    );
+  };
+
+  return (
+    <div>
+      <div style={proxyIntroStyle}>
+        只填写学生基本信息，系统会自动生成安全班级、兴趣活动区和可点击的学校地标。
+      </div>
+
+      <div style={proxySchoolGridStyle}>
+        <label style={fieldLabelStyle}>
+          学校地标名称
+          <input
+            value={schoolName}
+            onChange={(e) => setSchoolName(e.target.value)}
+            placeholder="例如：武藏野学艺专门学校"
+            style={inputStyle}
+          />
+        </label>
+        <label style={fieldLabelStyle}>
+          地标跳转网址
+          <input
+            value={schoolUrl}
+            onChange={(e) => setSchoolUrl(e.target.value)}
+            placeholder="https://..."
+            style={inputStyle}
+          />
+        </label>
+      </div>
+
+      <div style={studentListStyle}>
+        {students.map((student, index) => (
+          <div key={index} style={studentCardStyle}>
+            <div style={studentCardHeaderStyle}>
+              <span style={studentTitleStyle}>学生 {index + 1}</span>
+              {students.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeStudent(index)}
+                  style={smallGhostBtnStyle}
+                >
+                  删除
+                </button>
+              )}
+            </div>
+            <div style={studentGridStyle}>
+              <label style={fieldLabelStyle}>
+                姓名 / 称呼
+                <input
+                  value={student.name}
+                  onChange={(e) => updateStudent(index, { name: e.target.value })}
+                  placeholder="例如：小林"
+                  style={inputStyle}
+                />
+              </label>
+              <label style={fieldLabelStyle}>
+                交流安全等级
+                <select
+                  value={student.socialSafetyLevel}
+                  onChange={(e) =>
+                    updateStudent(index, {
+                      socialSafetyLevel: e.target.value as SocialSafetyLevel,
+                    })
+                  }
+                  style={inputStyle}
+                >
+                  <option value="gentle">gentle</option>
+                  <option value="very_gentle">very_gentle</option>
+                  <option value="guided">guided</option>
+                </select>
+              </label>
+              <label style={fieldLabelStyle}>
+                兴趣
+                <input
+                  value={student.interests}
+                  onChange={(e) => updateStudent(index, { interests: e.target.value })}
+                  placeholder="绘画、游戏、咖啡、动画..."
+                  style={inputStyle}
+                />
+              </label>
+              <label style={fieldLabelStyle}>
+                喜欢的音乐
+                <input
+                  value={student.favoriteMusic}
+                  onChange={(e) => updateStudent(index, { favoriteMusic: e.target.value })}
+                  placeholder="J-pop、Lo-fi、摇滚..."
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+            <label style={fieldLabelStyle}>
+              想聊 / 舒适话题
+              <input
+                value={student.comfortTopics}
+                onChange={(e) => updateStudent(index, { comfortTopics: e.target.value })}
+                placeholder="最近看的作品、校园生活、创作计划..."
+                style={inputStyle}
+              />
+            </label>
+            <label style={fieldLabelStyle}>
+              备注
+              <input
+                value={student.notes}
+                onChange={(e) => updateStudent(index, { notes: e.target.value })}
+                placeholder="性格、希望避免的话题、角色关系等"
+                style={inputStyle}
+              />
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setStudents((prev) => [...prev, { ...DEFAULT_PROXY_STUDENT }])}
+        style={addStudentBtnStyle}
+      >
+        添加学生
+      </button>
     </div>
   );
 }
@@ -692,6 +939,55 @@ function truncate(input: string, max: number): string {
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 
+function canSubmitCreateForm(
+  createMode: CreateWorldMode,
+  prompt: string,
+  students: ProxyStudentDraft[],
+): boolean {
+  if (createMode === "world") return prompt.trim().length > 0;
+  return students.some(hasStudentDraftContent);
+}
+
+function buildProxyClassroomPayload(
+  schoolName: string,
+  schoolUrl: string,
+  students: ProxyStudentDraft[],
+): ProxyClassroomCreateInput {
+  return {
+    schoolName: schoolName.trim(),
+    schoolUrl: schoolUrl.trim(),
+    students: students.filter(hasStudentDraftContent).map((student) => ({
+      name: student.name.trim(),
+      interests: student.interests.trim(),
+      favoriteMusic: student.favoriteMusic.trim(),
+      comfortTopics: student.comfortTopics.trim(),
+      socialSafetyLevel: student.socialSafetyLevel,
+      notes: student.notes.trim(),
+    })),
+  };
+}
+
+function summarizeProxyClassroomPrompt(payload: ProxyClassroomCreateInput): string {
+  const studentNames = payload.students
+    .map((student, index) => student.name || `学生${index + 1}`)
+    .join("、");
+  return [
+    "代理教室模式",
+    payload.schoolName ? `学校地标：${payload.schoolName}` : "",
+    studentNames ? `学生：${studentNames}` : "",
+  ].filter(Boolean).join(" / ");
+}
+
+function hasStudentDraftContent(student: ProxyStudentDraft): boolean {
+  return Boolean(
+    student.name.trim() ||
+    student.interests.trim() ||
+    student.favoriteMusic.trim() ||
+    student.comfortTopics.trim() ||
+    student.notes.trim(),
+  );
+}
+
 const pageStyle: CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -826,6 +1122,122 @@ const exampleChipStyle: CSSProperties = {
   fontSize: 11,
   cursor: "pointer",
   transition: "all 0.15s",
+};
+
+const modeSwitchStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 8,
+  padding: 4,
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.09)",
+  marginBottom: 22,
+};
+
+function modeSwitchButtonStyle(active: boolean): CSSProperties {
+  return {
+    border: "none",
+    borderRadius: 8,
+    padding: "10px 12px",
+    background: active ? "rgba(116,185,255,0.24)" : "transparent",
+    color: active ? "#ffffff" : "#a8b3d4",
+    fontWeight: active ? 700 : 500,
+    cursor: "pointer",
+  };
+}
+
+const proxyIntroStyle: CSSProperties = {
+  marginBottom: 16,
+  color: "#b9c4e6",
+  fontSize: 13,
+  lineHeight: 1.6,
+};
+
+const proxySchoolGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  marginBottom: 14,
+};
+
+const fieldLabelStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  color: "#9aa5cb",
+  fontSize: 12,
+  lineHeight: 1.4,
+};
+
+const inputStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 38,
+  background: "rgba(8, 10, 24, 0.72)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 10,
+  color: "#f3f6ff",
+  padding: "9px 10px",
+  fontSize: 13,
+  fontFamily: "inherit",
+  outline: "none",
+};
+
+const studentListStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const studentCardStyle: CSSProperties = {
+  border: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(255,255,255,0.045)",
+  borderRadius: 8,
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const studentCardHeaderStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+};
+
+const studentTitleStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: "#eef3ff",
+};
+
+const smallGhostBtnStyle: CSSProperties = {
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  color: "#cfd6ee",
+  borderRadius: 8,
+  padding: "5px 9px",
+  fontSize: 12,
+  cursor: "pointer",
+};
+
+const studentGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+};
+
+const addStudentBtnStyle: CSSProperties = {
+  marginTop: 12,
+  width: "100%",
+  background: "rgba(116,185,255,0.12)",
+  border: "1px solid rgba(116,185,255,0.28)",
+  color: "#dce9ff",
+  borderRadius: 10,
+  padding: "10px 12px",
+  fontSize: 13,
+  cursor: "pointer",
 };
 
 const sizeGridStyle: CSSProperties = {

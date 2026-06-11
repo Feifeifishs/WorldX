@@ -5,18 +5,31 @@ import { normalizeWorldDesign } from "./world-design-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export async function designWorld(userPrompt) {
+export async function designWorld(userPrompt, options = {}) {
   const { chatJSON } = await import("./models/llm-client.mjs");
 
-  const template = readFileSync(join(__dirname, "../prompts/design-world.md"), "utf-8");
-  const prompt = template.replace(/\{\{userPrompt\}\}/g, userPrompt);
+  const isProxyClassroom = options.mode === "proxy_classroom";
+  const templateName = isProxyClassroom
+    ? "design-proxy-classroom.md"
+    : "design-world.md";
+  const template = readFileSync(join(__dirname, "../prompts", templateName), "utf-8");
+  const prompt = template
+    .replace(/\{\{userPrompt\}\}/g, userPrompt)
+    .replace(
+      /\{\{classroomPayload\}\}/g,
+      JSON.stringify(options.proxyClassroom ?? {}, null, 2),
+    );
 
-  console.log("[WorldDesigner] Designing world from prompt...");
+  console.log(
+    isProxyClassroom
+      ? "[WorldDesigner] Designing proxy classroom from student basics..."
+      : "[WorldDesigner] Designing world from prompt...",
+  );
 
   const rawResult = await chatJSON({
     systemMessage: "You are an expert world designer for AI social simulations. Always respond with valid JSON.",
     userMessage: prompt,
-    temperature: 0.7,
+    temperature: 0.35,
     maxTokens: 32768,
   });
 
@@ -49,9 +62,10 @@ export async function designWorld(userPrompt) {
     (Array.isArray(result.regions) ? result.regions.length : 0) +
     (Array.isArray(result.interactiveElements) ? result.interactiveElements.length : 0);
 
-  if (result.characters.length > 8) {
+  const maxCharacters = isProxyClassroom ? 10 : 8;
+  if (result.characters.length > maxCharacters) {
     throw new Error(
-      `无法生成该世界：角色数量超出上限（${result.characters.length}/8）。请减少角色数量后重试。`,
+      `无法生成该世界：角色数量超出上限（${result.characters.length}/${maxCharacters}）。请减少角色数量后重试。`,
     );
   }
 

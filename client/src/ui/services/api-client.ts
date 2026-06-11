@@ -92,6 +92,25 @@ export type CreateJobSizeK = 1 | 2 | 4;
 
 export type CreateJobPhase = 1 | 2 | 3 | 4;
 
+export type CreateWorldMode = "world" | "proxy_classroom";
+
+export type SocialSafetyLevel = "gentle" | "very_gentle" | "guided";
+
+export interface ProxyClassroomStudentInput {
+  name: string;
+  interests?: string;
+  favoriteMusic?: string;
+  comfortTopics?: string;
+  socialSafetyLevel?: SocialSafetyLevel;
+  notes?: string;
+}
+
+export interface ProxyClassroomCreateInput {
+  schoolName?: string;
+  schoolUrl?: string;
+  students: ProxyClassroomStudentInput[];
+}
+
 export type CreateJobEvent =
   | { kind: "job_started"; at: number; jobId: string; prompt: string; sizeK: CreateJobSizeK }
   | { kind: "phase"; at: number; phase: CreateJobPhase; label: string }
@@ -304,6 +323,8 @@ export const apiClient = {
     prompt: string;
     sizeK: CreateJobSizeK;
     keepArtifacts?: boolean;
+    mode?: CreateWorldMode;
+    proxyClassroom?: ProxyClassroomCreateInput;
   }): Promise<{ ok: boolean; jobId: string }> {
     const res = await fetch(`${API_BASE}/worlds/create`, {
       method: "POST",

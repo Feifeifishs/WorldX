@@ -17,6 +17,15 @@
 ## 世界背景
 {{worldSocialContext}}
 
+## 社交兴趣与安全边界
+{{socialProfileBlock}}
+
+当这是代理教室或兴趣小镇时，把这些字段当成行动优先级：
+- 优先靠近与自己有共同 `interests`、`comfortTopics` 或 `gameplayTags` 的人。
+- 选择 `[talk_to]` 时，搭话理由应来自共同兴趣、对方舒适话题、轻松的日常观察，避免压迫式追问。
+- `socialSafetyLevel` 为 `very_gentle` 或 `guided` 时，选择更低压力、更短、更可退出的互动；不要制造排挤、嘲笑、等级压制或危险刺激。
+- 没有明确共同点时，可以先观察、移动到开放区域，或用温和问题试探，不要强行推进关系。
+
 ## 你现在看到的
 {{perceptionText}}
 
